@@ -1,0 +1,198 @@
+# ============================================================
+# 论文格式化配置文件 — 华南农业大学 (SCAU) 2024 默认配置
+# ============================================================
+# 使用方法:
+#   1. 复制此文件到 thesis-format.exe 同目录，重命名为 thesis_config.yaml
+#   2. 修改需要调整的参数（未修改的参数自动使用默认值）
+#   3. 运行: thesis-format.exe --input 论文.docx
+#
+# 也可用 --config 指定配置文件:
+#   thesis-format.exe --input 论文.docx --config 我的学校.yaml
+# ============================================================
+
+meta:
+  school_name: "华南农业大学"        # 学校名称（显示在工具标题和日志中）
+  config_version: 1
+
+# ---- 页面设置 ----
+page:
+  margins:                           # 页边距 (cm)
+    top: 2.4
+    bottom: 2.4
+    left: 2.4
+    right: 2.4
+  gutter: 0.5                       # 装订线 (cm)
+  header_distance: 1.5              # 页眉上边距 (cm)
+  footer_distance: 1.25             # 页脚下边距 (cm)
+
+# ---- 字体 ----
+fonts:
+  latin: "Times New Roman"          # 西文/数字字体
+  body: "宋体"                       # 正文中文字体
+  h1: "黑体"                         # 一级标题中文字体
+  h2: "黑体"                         # 二级标题
+  h3: "楷体"                         # 三级标题
+  h4: "楷体"                         # 四级标题
+
+# ---- 字号 (pt) ----
+sizes:
+  body: 12                           # 小四
+  h1: 14                             # 四号
+  h2: 12                             # 小四
+  h3: 12                             # 小四
+  h4: 12                             # 小四
+  caption: 10.5                      # 五号 (图题/表题)
+  note: 9                            # 小五 (表注)
+  footnote: 9                        # 小五 (脚注)
+  page_number: 10.5                  # 五号 (页码)
+
+# ---- 标题格式 ----
+headings:
+  h1:
+    bold: true
+    align: left                      # left / center / right / justify
+  h2:
+    bold: true
+    align: left
+  h3:
+    bold: false
+    align: left
+  h4:
+    bold: false
+    align: left
+
+# ---- 正文格式 ----
+body:
+  align: justify                     # 两端对齐
+  first_line_indent: 24              # 首行缩进 (pt)，24pt = 2个中文字符
+  line_spacing: 1.5                  # 行距倍数
+
+# ---- 表格 ----
+table:
+  line_spacing: 1.0                  # 表格内单倍行距
+  top_border_sz: 12                  # 顶线粗细 (1/8 pt)，12 = 1.5pt
+  header_border_sz: 8                # 栏目线 (1/8 pt)，8 = 1pt
+  bottom_border_sz: 12              # 底线 (1/8 pt)，12 = 1.5pt
+
+# ---- 脚注 ----
+footnote:
+  line_spacing: 1.0
+
+# ---- 图表题 ----
+captions:
+  figure_pattern: '^图\s*\d'             # 图题正则
+  table_pattern: '^(续)?表\s*\d'         # 表题正则
+  subfigure_pattern: '^\([a-z]\)'        # 分图题正则
+  note_pattern: '^注[：:]'               # 表注正则
+  keep_with_next: true                   # 图表题防分页
+  check_numbering: true                  # 检查图表编号连续性
+
+# ---- 参考文献 ----
+references:
+  first_line_indent: -24             # 悬挂缩进首行 (pt)
+  left_indent: 24                    # 左缩进 (pt)
+
+# ---- 页码 ----
+page_numbers:
+  front_format: "upperRoman"         # 前置部分: upperRoman / lowerRoman / decimal
+  body_format: "decimal"             # 正文部分: decimal / lowerRoman
+  front_start: 1                     # 前置部分起始页码
+  body_start: 1                      # 正文起始页码
+
+# ---- 目录 ----
+toc:
+  depth: 3                           # 目录显示层级 (1-4)
+  font: "宋体"                       # 目录内容字体
+  font_size: 12                      # 目录内容字号 (pt)，小四
+  line_spacing: 1.5                  # 目录行距
+
+# ---- 特殊标题映射 ----
+# match: 原文关键词（去除空格后匹配）
+# display: 显示文本（可包含全角空格用于间距控制）
+# align: 对齐方式
+special_titles:
+  - match: "摘要"
+    display: "摘        要"
+    align: center
+  - match: "目录"
+    display: "目        录"
+    align: center
+  - match: "参考文献"
+    display: "参  考  文  献"
+    align: center
+  - match: "致谢"
+    display: "致        谢"
+    align: center
+
+# ---- 结构识别模式 (正则表达式) ----
+sections:
+  chapter_pattern: '^第\s*\d+\s*章\b'         # 一级标题编号格式
+  appendix_pattern: '^附录\s*[A-Z]'           # 附录标题格式
+  h2_pattern: '^\d+\.\d+\s'                   # 二级标题
+  h3_pattern: '^\d+\.\d+\.\d+\s'              # 三级标题
+  h4_pattern: '^\d+\.\d+\.\d+\.\d+\s'         # 四级标题
+  special_h1:                                  # 特殊一级标题（无编号）
+    - "参考文献"
+    - "致谢"
+  renumber_headings: true                      # 自动修正标题编号
+  cn_keywords_pattern: '^\s*关键词\s*[：:]'
+  en_abstract_pattern: '(?i)^\s*Abstract\s*[：:]'
+  en_keywords_pattern: '(?i)^\s*Key\s*words\s*[：:]'
+
+# ---- 封面 ----
+# enabled: true  使用默认封面
+# enabled: false 不生成封面
+cover:
+  enabled: true
+  logo: "scau_logo.png"             # Logo 文件名（相对于配置文件目录）
+  logo_width_pt: 343.2              # Logo 宽度 (pt)
+  logo_height_pt: 96                # Logo 高度 (pt)
+  title_text: "本科毕业论文(或设计)"  # 封面大标题
+  title_font_size: 36                # 封面大标题字号 (pt)
+  thesis_title_placeholder: "论文（或设计）题目"
+  thesis_title_font: "黑体"
+  thesis_title_size: 22              # 论文题目字号 (pt)
+  fields:                            # 信息栏字段（下划线长度，单位：空格数）
+    - label: "学    院:"
+      underline_chars: 34
+    - label: "专    业:"
+      underline_chars: 34
+    - label: "姓    名:"
+      underline_chars: 34
+    - label: "学    号:"
+      underline_chars: 34
+  advisor:
+    label: "指导教师:"
+    underline_chars: 16
+    title_label: "职称"
+    title_underline_chars: 16
+  date:
+    label: "提交日期："
+    segments: ["年", "月", "日"]
+    segment_underline_chars: 10
+
+# ---- 声明页 ----
+declarations:
+  - title: "华南农业大学本科毕业论文（设计）原创性声明"
+    body: >
+      本人郑重声明：所呈交的毕业论文（设计），是本人在导师的指导下，
+      独立进行研究工作所取得的成果。除文中已经注明引用的内容外，本论文
+      不包含任何其他个人或集体已经发表或撰写过的作品成果。对本文的研究
+      做出重要贡献的个人和集体，均已在文中以明确方式标明。本人完全意识
+      到本声明的法律结果由本人承担。
+    signature: "作者签名：                        日期：       年     月     日"
+
+  - title: "华南农业大学本科毕业论文（设计）使用授权声明"
+    body: >
+      本人完全了解学校有关保留、使用毕业论文（设计）的规定，同意学校
+      保留并向国家有关部门或机构送交毕业论文（设计）的复印件和电子版，
+      允许毕业论文（设计）被查阅和借阅。学校可以将本毕业论文（设计）的
+      全部或部分内容编入有关数据库进行检索，可以采用影印、缩印或扫描等
+      复制手段保存和汇编毕业论文（设计）。
+    signature: "作者签名：                           指导教师签名：                        "
+    date_line: "日期：       年      月      日      日期：     年      月      日"
+
+# ---- 主题字体 ----
+theme_fonts:
+  latin: "Times New Roman"
+  hans: "宋体"

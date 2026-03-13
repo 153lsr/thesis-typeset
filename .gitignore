@@ -1,0 +1,30 @@
+# Build artifacts
+build/
+dist/
+*.exe
+*.spec
+__pycache__/
+*.pyc
+
+# IDE / tool
+.ace-tool/
+.omc/
+.claude/
+
+# User documents
+*.docx
+*.doc
+*.txt
+!requirements.txt
+~$*
+
+# Legacy scripts
+thesis-format-2024.bat
+thesis-format-2024.ps1
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Internal docs
+FORMATTING_SPEC.md
