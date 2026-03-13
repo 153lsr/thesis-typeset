@@ -3,6 +3,7 @@
 一键格式化毕业论文。双击 exe，选文件，点"开始格式化"，搞定。
 
 默认配置为 **华南农业大学 2024 本科毕业论文** 格式规范，支持通过 YAML 配置文件适配其他学校。
+<img width="846" height="712" alt="image" src="https://github.com/user-attachments/assets/63c88a80-61e2-4ce4-b348-23e321bdbdd2" />
 
 ## 功能
 
