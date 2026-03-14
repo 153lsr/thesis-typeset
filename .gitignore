@@ -16,6 +16,8 @@ __pycache__/
 *.doc
 *.txt
 !requirements.txt
+!examples/*.txt
+!examples/*.docx
 ~$*
 
 # Legacy scripts
