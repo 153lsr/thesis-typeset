@@ -40,6 +40,8 @@
 
 从 [Releases](../../releases) 下载 `thesis-format.exe`，双击运行。
 
+> 仅支持 Windows。Mac/Linux 用户需从源码运行（见下方）。
+
 ### 方式二：从源码运行
 
 ```bash
