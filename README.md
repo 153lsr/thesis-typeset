@@ -92,6 +92,9 @@ build_exe.bat
 ## 文档示例看这里
 https://github.com/153lsr/thesis-typeset/blob/main/STRUCTURE_GUIDE.md
 
+## 界面概览
+
+
 ## License
 
 GPL-3.0
