@@ -1625,16 +1625,19 @@ def _apply_ref_crosslinks(doc, cfg):
     if body_start is None:
         body_start = 0
 
-    # --- detect citation style (only proceed for numbered) ---
+    # --- detect citation style ---
     num_count = ay_count = 0
     for i in range(body_start, ref_start - 1):
         t = paras[i].text
         num_count += len(_CITE_NUM_RE.findall(t))
-        ay_count += len(_CITE_AY_OUTER.findall(t))
-    if num_count < ay_count:
-        return  # author-year style, skip
+        for m in _CITE_AY_OUTER.finditer(t):
+            inner = m.group(1)
+            for seg in re.split(r'[;；]', inner):
+                if _CITE_AY_INNER.match(seg.strip()):
+                    ay_count += 1
+    is_numbered = not (ay_count > 0 and num_count == 0 and ay_count > num_count)
 
-    # --- Step 1: reference entries → SEQ fields + bookmarks ---
+    # --- Step 1: reference entries → SEQ fields + bookmarks (always) ---
     bm_id = 1000
     bookmark_map = {}  # {original_num: bookmark_name}
 
@@ -1695,7 +1698,9 @@ def _apply_ref_crosslinks(doc, cfg):
     if not bookmark_map:
         return
 
-    # --- Step 2: body citations → REF fields ---
+    # --- Step 2: body citations → REF fields (numbered style only) ---
+    if not is_numbered or num_count == 0:
+        return
     in_appendix = False
     for i in range(body_start, ref_start - 1):
         p = paras[i]
