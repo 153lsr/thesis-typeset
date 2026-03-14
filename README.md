@@ -98,7 +98,16 @@ build_exe.bat
 | `defaults/scau_2024.yaml` | 默认配置文件 |
 | `defaults/scau_logo.png` | 学校 Logo |
 
-## 文档示例看这里
+## 示例文件
+
+[`examples/`](examples/) 目录包含处理前后的对比示例：
+
+| 文件 | 说明 |
+|------|------|
+| [`处理前示例.txt`](examples/处理前示例.txt) | 输入：纯文本论文 |
+| [`处理后示例.docx`](examples/处理后示例.docx) | 输出：格式化后的 Word 文档 |
+
+## 文档结构说明
 https://github.com/153lsr/thesis-typeset/blob/main/STRUCTURE_GUIDE.md
 
 ## 界面概览
