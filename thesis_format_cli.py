@@ -152,14 +152,28 @@ class FormatterGUI:
         ("文本/Markdown", "*.txt *.md"),
         ("LaTeX", "*.tex"),
     ]
-    CATEGORIES = ["页面", "字体", "标题", "图表", "封面", "声明", "高级"]
-    PT_SIZES = ["9", "10.5", "12", "14", "16", "18", "22", "24", "26", "36"]
+    CATEGORIES = ["页面", "正文", "标题", "页眉页码", "目录参考", "图表", "封面声明"]
+    PT_SIZES = ["9pt", "10.5pt", "12pt", "14pt", "16pt", "18pt", "22pt", "24pt", "26pt", "36pt"]
     ALIGN_LABELS = ["左对齐", "居中", "右对齐", "两端对齐"]
-    _ALIGN = {"左对齐": "left", "居中": "center", "右对齐": "right", "两端对齐": "justify"}
+    ALIGN_LABELS_KEEP = ["保持原样", "左对齐", "居中", "右对齐", "两端对齐"]
+    _ALIGN = {"左对齐": "left", "居中": "center", "右对齐": "right", "两端对齐": "justify", "保持原样": "keep"}
     _ALIGN_R = {v: k for k, v in _ALIGN.items()}
+    BOLD_LABELS = ["加粗", "不加粗", "保持原样"]
+    _BOLD = {"加粗": True, "不加粗": False, "保持原样": "keep"}
+    _BOLD_R = {True: "加粗", False: "不加粗", "keep": "保持原样"}
+    _FM_MODE = {"自动识别": "auto", "跳过（不处理）": "skip", "强制格式化": "format"}
+    _FM_MODE_R = {v: k for k, v in _FM_MODE.items()}
     _PGFMT = {"大写罗马 (I, II, III)": "upperRoman", "小写罗马 (i, ii, iii)": "lowerRoman", "阿拉伯数字 (1, 2, 3)": "decimal"}
     _PGFMT_R = {v: k for k, v in _PGFMT.items()}
     PGFMT_LABELS = list(_PGFMT.keys())
+    _PGPOS = {"居中": "center", "居左": "left", "居右": "right", "奇右偶左": "alternate"}
+    _PGPOS_R = {v: k for k, v in _PGPOS.items()}
+    PGPOS_LABELS = list(_PGPOS.keys())
+    PGPOS_LABELS_SIMPLE = ["居中", "居左", "居右"]
+    _HF_SCOPE = {"仅正文": "body", "全部": "all"}
+    _HF_SCOPE_R = {v: k for k, v in _HF_SCOPE.items()}
+    _BORDER_STYLE = {"单线": "single", "双线": "double"}
+    _BORDER_STYLE_R = {v: k for k, v in _BORDER_STYLE.items()}
     HEADING_PRESETS = {
         "第X章 / X.X / X.X.X (SCAU)": {
             "h1": r"^第\s*\d+\s*章\b", "h2": r"^\d+\.\d+\s",
@@ -230,15 +244,26 @@ class FormatterGUI:
 
         # build category panels
         self._panels = {}
+        self._panel_canvas = {}
         for name, builder in [
-            ("页面", self._build_page), ("字体", self._build_font),
-            ("标题", self._build_heading), ("图表", self._build_caption),
-            ("封面", self._build_cover),
-            ("声明", self._build_decl), ("高级", self._build_advanced),
+            ("页面", self._build_page), ("正文", self._build_body),
+            ("标题", self._build_heading), ("页眉页码", self._build_header_pn),
+            ("目录参考", self._build_toc_ref), ("图表", self._build_caption),
+            ("封面声明", self._build_cover_decl),
         ]:
-            f = ttk.Frame(self._content, padding=8)
-            builder(f)
-            self._panels[name] = f
+            wrapper = ttk.Frame(self._content)
+            canvas = tk.Canvas(wrapper, highlightthickness=0, borderwidth=0)
+            vsb = ttk.Scrollbar(wrapper, orient="vertical", command=canvas.yview)
+            inner = ttk.Frame(canvas, padding=8)
+            inner.bind("<Configure>",
+                       lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
+            canvas.create_window((0, 0), window=inner, anchor="nw")
+            canvas.configure(yscrollcommand=vsb.set)
+            canvas.pack(side="left", fill="both", expand=True)
+            vsb.pack(side="right", fill="y")
+            builder(inner)
+            self._panels[name] = wrapper
+            self._panel_canvas[name] = canvas
 
         # --- bottom bar ---
         self._build_bottom(root)
@@ -271,18 +296,35 @@ class FormatterGUI:
         self._v_fh3 = tk.StringVar(value=c["fonts"]["h3"])
         self._v_fh4 = tk.StringVar(value=c["fonts"]["h4"])
         # sizes
-        self._v_sbody = tk.StringVar(value=str(c["sizes"]["body"]))
-        self._v_sh1 = tk.StringVar(value=str(c["sizes"]["h1"]))
-        self._v_sh2 = tk.StringVar(value=str(c["sizes"]["h2"]))
-        self._v_scap = tk.StringVar(value=str(c["sizes"]["caption"]))
-        self._v_sfn = tk.StringVar(value=str(c["sizes"]["footnote"]))
+        self._v_sbody = tk.StringVar(value=str(c["sizes"]["body"]) + "pt")
+        self._v_sh1 = tk.StringVar(value=str(c["sizes"]["h1"]) + "pt")
+        self._v_sh2 = tk.StringVar(value=str(c["sizes"]["h2"]) + "pt")
+        self._v_sh3 = tk.StringVar(value=str(c["sizes"]["h3"]) + "pt")
+        self._v_sh4 = tk.StringVar(value=str(c["sizes"]["h4"]) + "pt")
+        self._v_scap = tk.StringVar(value=str(c["sizes"]["caption"]) + "pt")
+        self._v_sfn = tk.StringVar(value=str(c["sizes"]["footnote"]) + "pt")
         # headings
-        self._v_h1b = tk.BooleanVar(value=c["headings"]["h1"]["bold"])
+        self._v_h1b = tk.StringVar(value=self._BOLD_R.get(c["headings"]["h1"]["bold"], "加粗"))
         self._v_h1a = tk.StringVar(value=self._ALIGN_R.get(c["headings"]["h1"]["align"], "左对齐"))
-        self._v_h2b = tk.BooleanVar(value=c["headings"]["h2"]["bold"])
-        self._v_h3b = tk.BooleanVar(value=c["headings"]["h3"]["bold"])
+        self._v_h2b = tk.StringVar(value=self._BOLD_R.get(c["headings"]["h2"]["bold"], "加粗"))
+        self._v_h2a = tk.StringVar(value=self._ALIGN_R.get(c["headings"]["h2"]["align"], "左对齐"))
+        self._v_h3b = tk.StringVar(value=self._BOLD_R.get(c["headings"]["h3"]["bold"], "不加粗"))
+        self._v_h3a = tk.StringVar(value=self._ALIGN_R.get(c["headings"]["h3"].get("align", "left"), "左对齐"))
+        self._v_h4b = tk.StringVar(value=self._BOLD_R.get(c["headings"]["h4"]["bold"], "不加粗"))
+        self._v_h4a = tk.StringVar(value=self._ALIGN_R.get(c["headings"]["h4"].get("align", "left"), "左对齐"))
+        # heading spacing (lines)
+        self._v_h1sb = tk.DoubleVar(value=c["headings"]["h1"].get("space_before", 0))
+        self._v_h1sa = tk.DoubleVar(value=c["headings"]["h1"].get("space_after", 0))
+        self._v_h2sb = tk.DoubleVar(value=c["headings"]["h2"].get("space_before", 0))
+        self._v_h2sa = tk.DoubleVar(value=c["headings"]["h2"].get("space_after", 0))
+        self._v_h3sb = tk.DoubleVar(value=c["headings"]["h3"].get("space_before", 0))
+        self._v_h3sa = tk.DoubleVar(value=c["headings"]["h3"].get("space_after", 0))
+        self._v_h4sb = tk.DoubleVar(value=c["headings"]["h4"].get("space_before", 0))
+        self._v_h4sa = tk.DoubleVar(value=c["headings"]["h4"].get("space_after", 0))
         self._v_lsp = tk.DoubleVar(value=c["body"]["line_spacing"])
         self._v_ind = tk.DoubleVar(value=c["body"]["first_line_indent"])
+        self._v_body_sb = tk.DoubleVar(value=c["body"].get("space_before", 0))
+        self._v_body_sa = tk.DoubleVar(value=c["body"].get("space_after", 0))
         # heading numbering patterns
         sec = c["sections"]
         self._v_hpreset = tk.StringVar(value=self.PRESET_NAMES[0])
@@ -310,14 +352,53 @@ class FormatterGUI:
         # advanced
         self._v_tocd = tk.IntVar(value=c["toc"]["depth"])
         self._v_tocfont = tk.StringVar(value=c["toc"].get("font", c["fonts"]["body"]))
-        self._v_tocsz = tk.StringVar(value=str(c["toc"].get("font_size", c["sizes"]["body"])))
+        self._v_tocsz = tk.StringVar(value=str(c["toc"].get("font_size", c["sizes"]["body"])) + "pt")
         self._v_tocls = tk.DoubleVar(value=c["toc"].get("line_spacing", c["body"]["line_spacing"]))
+        self._v_toc_h1font = tk.StringVar(value=c["toc"].get("h1_font", c["fonts"]["h1"]))
+        self._v_toc_h1sz = tk.StringVar(value=str(c["toc"].get("h1_font_size", c["sizes"]["h1"])) + "pt")
+        self._v_toc_sb = tk.DoubleVar(value=c["toc"].get("space_before", 0))
+        self._v_toc_sa = tk.DoubleVar(value=c["toc"].get("space_after", 0))
         self._v_refind = tk.DoubleVar(value=c["references"]["left_indent"])
         self._v_tbl_top = tk.DoubleVar(value=c["table"]["top_border_sz"] / 8)
         self._v_tbl_hdr = tk.DoubleVar(value=c["table"]["header_border_sz"] / 8)
         self._v_tbl_bot = tk.DoubleVar(value=c["table"]["bottom_border_sz"] / 8)
         self._v_pgfmt_f = tk.StringVar(value=self._PGFMT_R.get(c["page_numbers"]["front_format"], "大写罗马"))
         self._v_pgfmt_b = tk.StringVar(value=self._PGFMT_R.get(c["page_numbers"]["body_format"], "阿拉伯数字"))
+        # header_footer
+        hf = c["header_footer"]
+        self._v_hf_en = tk.BooleanVar(value=hf["enabled"])
+        self._v_hf_scope = tk.StringVar(value=self._HF_SCOPE_R.get(hf.get("scope", "body"), "仅正文"))
+        self._v_hf_diff_oe = tk.BooleanVar(value=hf.get("different_odd_even", True))
+        self._v_hf_first_no = tk.BooleanVar(value=hf.get("first_page_no_header", False))
+        self._v_hf_odd_text = tk.StringVar(value=hf["odd_page_text"])
+        self._v_hf_even_text = tk.StringVar(value=hf["even_page_text"])
+        self._v_hf_odd_chap = tk.BooleanVar(value="{chapter_title}" in hf["odd_page_text"])
+        self._v_hf_even_chap = tk.BooleanVar(value="{chapter_title}" in hf["even_page_text"])
+        self._v_hf_font = tk.StringVar(value=hf["font"])
+        self._v_hf_size = tk.StringVar(value=str(hf["font_size"]) + "pt")
+        self._v_hf_bold = tk.BooleanVar(value=hf.get("bold", False))
+        self._v_hf_odd_align = tk.StringVar(value=self._ALIGN_R.get(hf.get("odd_page_align", "center"), "居中"))
+        self._v_hf_even_align = tk.StringVar(value=self._ALIGN_R.get(hf.get("even_page_align", "center"), "居中"))
+        self._v_hf_border = tk.BooleanVar(value=hf.get("border_bottom", True))
+        self._v_hf_bwidth = tk.DoubleVar(value=hf.get("border_bottom_width", 0.75))
+        self._v_hf_bstyle = tk.StringVar(value=self._BORDER_STYLE_R.get(hf.get("border_bottom_style", "single"), "单线"))
+        # page_numbers position
+        pn = c["page_numbers"]
+        self._v_pn_fpos = tk.StringVar(value=self._PGPOS_R.get(pn.get("front_position", "center"), "居中"))
+        self._v_pn_bpos = tk.StringVar(value=self._PGPOS_R.get(pn.get("body_position", "center"), "居中"))
+        self._v_pn_deco = tk.StringVar(value=pn.get("decorator", "{page}"))
+        self._v_pn_font = tk.StringVar(value=pn.get("font", ""))
+        self._v_pn_bold = tk.BooleanVar(value=pn.get("bold", False))
+        self._v_pn_size = tk.StringVar(value=str(c["sizes"]["page_number"]) + "pt")
+        self._v_pn_fstart = tk.IntVar(value=pn.get("front_start", 1))
+        self._v_pn_bstart = tk.IntVar(value=pn.get("body_start", 1))
+        # advanced extras
+        self._v_body_align = tk.StringVar(value=self._ALIGN_R.get(c["body"]["align"], "两端对齐"))
+        self._v_tbl_ls = tk.DoubleVar(value=c["table"]["line_spacing"])
+        self._v_fn_ls = tk.DoubleVar(value=c["footnote"]["line_spacing"])
+        # front_matter
+        fm = c.get("front_matter", {})
+        self._v_fm_mode = tk.StringVar(value=self._FM_MODE_R.get(fm.get("mode", "auto"), "自动识别"))
         # file I/O
         self._v_in = tk.StringVar()
         self._v_out = tk.StringVar()
@@ -373,36 +454,109 @@ class FormatterGUI:
         r = self._row_spin(p, r, "装订线:", self._v_gutter)
         r = self._row_spin(p, r, "页眉距:", self._v_hdist)
         r = self._row_spin(p, r, "页脚距:", self._v_fdist)
+        r = self._sep(p, r)
+        r = self._row_combo(p, r, "前置页处理:", self._v_fm_mode, list(self._FM_MODE.keys()))
+        self._ttk.Label(
+            p, text="前置页包括封面、声明和摘要，不同学校设置差别大",
+            foreground="gray", font=("Microsoft YaHei UI", 8)
+        ).grid(row=r, column=0, columnspan=3, sticky="w", padx=18)
+        r += 1
 
-    def _build_font(self, p):
+    def _build_header_pn(self, p):
+        r = 0
+        # -- 页眉 --
+        self._ttk.Label(p, text="页眉", font=("Microsoft YaHei UI", 10, "bold")).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        r += 1
+        r = self._row_check(p, r, "启用页眉", self._v_hf_en)
+        r = self._row_combo(p, r, "作用范围:", self._v_hf_scope, list(self._HF_SCOPE.keys()))
+        r = self._row_check(p, r, "奇偶页不同", self._v_hf_diff_oe)
+        r = self._row_check(p, r, "首页不显示页眉", self._v_hf_first_no)
+        # odd page (right side)
+        r = self._row_entry(p, r, "奇数页(右):", self._v_hf_odd_text)
+        r = self._row_check(p, r, "  ↳ 自动显示章标题", self._v_hf_odd_chap)
+        r = self._row_combo(p, r, "奇数页对齐:", self._v_hf_odd_align, self.ALIGN_LABELS)
+        # even page (left side)
+        r = self._row_entry(p, r, "偶数页(左):", self._v_hf_even_text)
+        r = self._row_check(p, r, "  ↳ 自动显示章标题", self._v_hf_even_chap)
+        r = self._row_combo(p, r, "偶数页对齐:", self._v_hf_even_align, self.ALIGN_LABELS)
+        r = self._row_entry(p, r, "页眉字体:", self._v_hf_font)
+        r = self._row_combo(p, r, "页眉字号:", self._v_hf_size, self.PT_SIZES)
+        r = self._row_check(p, r, "页眉文字加粗", self._v_hf_bold)
+        r = self._row_check(p, r, "页眉下划线", self._v_hf_border)
+        r = self._row_spin(p, r, "下划线粗细:", self._v_hf_bwidth, lo=0.25, hi=3.0, step=0.25, unit="磅")
+        r = self._row_combo(p, r, "下划线样式:", self._v_hf_bstyle, list(self._BORDER_STYLE.keys()))
+        r = self._sep(p, r)
+        # -- 页码 --
+        self._ttk.Label(p, text="页码", font=("Microsoft YaHei UI", 10, "bold")).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        r += 1
+        r = self._row_combo(p, r, "前置页码位置:", self._v_pn_fpos, self.PGPOS_LABELS_SIMPLE)
+        r = self._row_combo(p, r, "正文页码位置:", self._v_pn_bpos, self.PGPOS_LABELS)
+        r = self._row_combo(p, r, "前置页码格式:", self._v_pgfmt_f, self.PGFMT_LABELS)
+        r = self._row_combo(p, r, "正文页码格式:", self._v_pgfmt_b, self.PGFMT_LABELS)
+        r = self._row_spin(p, r, "前置起始编号:", self._v_pn_fstart, lo=1, hi=999, step=1, unit="")
+        r = self._row_spin(p, r, "正文起始编号:", self._v_pn_bstart, lo=1, hi=999, step=1, unit="")
+        r = self._row_entry(p, r, "页码修饰:", self._v_pn_deco, hint="如: - {page} -")
+        r = self._row_entry(p, r, "页码字体:", self._v_pn_font, hint="空=跟随西文")
+        r = self._row_combo(p, r, "页码字号:", self._v_pn_size, self.PT_SIZES)
+        r = self._row_check(p, r, "页码加粗", self._v_pn_bold)
+
+    def _build_body(self, p):
         r = 0
         sz = self.PT_SIZES
         r = self._row_entry(p, r, "西文字体:", self._v_flat)
-        r = self._row_entry(p, r, "正文中文:", self._v_fbody)
+        r = self._row_entry(p, r, "正文中文字体:", self._v_fbody)
         r = self._row_combo(p, r, "正文字号:", self._v_sbody, sz)
+        r = self._row_combo(p, r, "正文对齐:", self._v_body_align, self.ALIGN_LABELS_KEEP)
+        r = self._row_spin(p, r, "首行缩进:", self._v_ind, lo=0, hi=100, step=1, unit="pt")
+        r = self._row_spin(p, r, "行距:", self._v_lsp, lo=1.0, hi=3.0, step=0.25, unit="倍")
+        r = self._row_spin(p, r, "段前:", self._v_body_sb, lo=0, hi=5, step=0.5, unit="行")
+        r = self._row_spin(p, r, "段后:", self._v_body_sa, lo=0, hi=5, step=0.5, unit="行")
         r = self._sep(p, r)
-        r = self._row_entry(p, r, "一级标题字体:", self._v_fh1)
-        r = self._row_combo(p, r, "一级标题字号:", self._v_sh1, sz)
-        r = self._row_entry(p, r, "二级标题字体:", self._v_fh2)
-        r = self._row_combo(p, r, "二级标题字号:", self._v_sh2, sz)
-        r = self._row_entry(p, r, "三级标题字体:", self._v_fh3)
-        r = self._row_entry(p, r, "四级标题字体:", self._v_fh4)
-        r = self._sep(p, r)
-        r = self._row_combo(p, r, "图表题字号:", self._v_scap, sz)
         r = self._row_combo(p, r, "脚注字号:", self._v_sfn, sz)
+        r = self._row_spin(p, r, "脚注行距:", self._v_fn_ls, lo=0.5, hi=3.0, step=0.25, unit="倍")
 
     def _build_heading(self, p):
         r = 0
-        r = self._row_check(p, r, "一级标题加粗", self._v_h1b)
-        r = self._row_combo(p, r, "一级标题对齐:", self._v_h1a, self.ALIGN_LABELS)
-        r = self._row_check(p, r, "二级标题加粗", self._v_h2b)
-        r = self._row_check(p, r, "三级标题加粗", self._v_h3b)
-        r = self._sep(p, r)
-        r = self._row_spin(p, r, "行距:", self._v_lsp, lo=1.0, hi=3.0, step=0.25, unit="倍")
-        r = self._row_spin(p, r, "首行缩进:", self._v_ind, lo=0, hi=100, step=1, unit="pt")
+        sz = self.PT_SIZES
+
+        def _heading_block(r, label, v_font, v_size, v_bold, v_align, v_sb, v_sa):
+            self._ttk.Label(p, text=label, font=("Microsoft YaHei UI", 9, "bold")).grid(
+                row=r, column=0, columnspan=3, sticky="w", pady=(4, 2))
+            r += 1
+            r = self._row_entry(p, r, "  字体:", v_font)
+            r = self._row_combo(p, r, "  字号:", v_size, sz)
+            r = self._row_combo(p, r, "  加粗:", v_bold, self.BOLD_LABELS)
+            r = self._row_combo(p, r, "  对齐:", v_align, self.ALIGN_LABELS_KEEP)
+            self._ttk.Label(p, text="  段前:").grid(row=r, column=0, sticky="w", pady=3)
+            sf = self._ttk.Frame(p)
+            sf.grid(row=r, column=1, columnspan=2, sticky="w", padx=4, pady=3)
+            self._ttk.Spinbox(sf, from_=-1, to=5, increment=0.5, textvariable=v_sb, width=5).pack(side="left")
+            self._ttk.Label(sf, text="行  段后:").pack(side="left", padx=(4, 0))
+            self._ttk.Spinbox(sf, from_=-1, to=5, increment=0.5, textvariable=v_sa, width=5).pack(side="left")
+            self._ttk.Label(sf, text="行").pack(side="left")
+            r += 1
+            return r
+
+        r = _heading_block(r, "一级标题 (H1)",
+                           self._v_fh1, self._v_sh1, self._v_h1b, self._v_h1a,
+                           self._v_h1sb, self._v_h1sa)
+        r = _heading_block(r, "二级标题 (H2)",
+                           self._v_fh2, self._v_sh2, self._v_h2b, self._v_h2a,
+                           self._v_h2sb, self._v_h2sa)
+        r = _heading_block(r, "三级标题 (H3)",
+                           self._v_fh3, self._v_sh3, self._v_h3b, self._v_h3a,
+                           self._v_h3sb, self._v_h3sa)
+        r = _heading_block(r, "四级标题 (H4)",
+                           self._v_fh4, self._v_sh4, self._v_h4b, self._v_h4a,
+                           self._v_h4sb, self._v_h4sa)
+
+        self._ttk.Label(p, text="(-1 = 保持原样)", foreground="gray").grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        r += 1
         r = self._sep(p, r)
         r = self._row_check(p, r, "自动修正标题编号（检测缺失/跳号并重编号）", self._v_renum)
-        # heading numbering scheme
         self._ttk.Label(p, text="编号预设:").grid(row=r, column=0, sticky="w", pady=3)
         pcb = self._ttk.Combobox(p, textvariable=self._v_hpreset,
                                  values=self.PRESET_NAMES, width=28, state="readonly")
@@ -424,6 +578,8 @@ class FormatterGUI:
 
     def _build_caption(self, p):
         r = 0
+        sz = self.PT_SIZES
+        r = self._row_combo(p, r, "图表题字号:", self._v_scap, sz)
         r = self._row_check(p, r, "图表题防分页 (keep with next)", self._v_cap_kwn)
         r = self._row_check(p, r, "检查图表编号连续性", self._v_cap_chk)
         r = self._sep(p, r)
@@ -431,11 +587,19 @@ class FormatterGUI:
         r = self._row_entry(p, r, "表题模式:", self._v_cap_tbl, hint="(如: 表1)")
         r = self._row_entry(p, r, "分图模式:", self._v_cap_sub, hint="(如: (a))")
         r = self._row_entry(p, r, "表注模式:", self._v_cap_note, hint="(如: 注：)")
+        r = self._sep(p, r)
+        self._ttk.Label(p, text="三线表", font=("Microsoft YaHei UI", 10, "bold")).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        r += 1
+        r = self._row_spin(p, r, "顶线粗细:", self._v_tbl_top, lo=0.25, hi=6, step=0.25, unit="磅")
+        r = self._row_spin(p, r, "栏目线粗细:", self._v_tbl_hdr, lo=0.25, hi=6, step=0.25, unit="磅")
+        r = self._row_spin(p, r, "底线粗细:", self._v_tbl_bot, lo=0.25, hi=6, step=0.25, unit="磅")
+        r = self._row_spin(p, r, "表格行距:", self._v_tbl_ls, lo=0.5, hi=3.0, step=0.25, unit="倍")
 
-    def _build_cover(self, p):
+    def _build_cover_decl(self, p):
+        # -- 封面 --
         r = 0
         r = self._row_check(p, r, "启用封面", self._v_cov_en)
-        # custom cover docx
         self._ttk.Label(p, text="自定义封面:").grid(row=r, column=0, sticky="w", pady=3)
         cf = self._ttk.Frame(p)
         cf.grid(row=r, column=1, columnspan=2, sticky="w", padx=4, pady=3)
@@ -448,7 +612,6 @@ class FormatterGUI:
         r += 1
         r = self._sep(p, r)
         r = self._row_entry(p, r, "学校名称:", self._v_school)
-        # logo with browse
         self._ttk.Label(p, text="Logo 文件:").grid(row=r, column=0, sticky="w", pady=3)
         lf = self._ttk.Frame(p)
         lf.grid(row=r, column=1, columnspan=2, sticky="w", padx=4, pady=3)
@@ -457,7 +620,6 @@ class FormatterGUI:
         r += 1
         r = self._row_entry(p, r, "封面标题:", self._v_covtitle)
         r = self._sep(p, r)
-        # cover fields dynamic list
         self._ttk.Label(p, text="信息栏字段:").grid(row=r, column=0, sticky="nw", pady=3)
         self._cov_fields_frame = self._ttk.Frame(p)
         self._cov_fields_frame.grid(row=r, column=1, columnspan=2, sticky="w", padx=4, pady=3)
@@ -467,28 +629,9 @@ class FormatterGUI:
         bf.grid(row=r, column=1, sticky="w", padx=4, pady=3)
         self._ttk.Button(bf, text="添加", width=6, command=self._add_cov_field).pack(side="left")
         self._ttk.Button(bf, text="删除末行", width=8, command=self._del_cov_field).pack(side="left", padx=4)
-
-    def _add_cov_field(self, label="", width=33):
-        tk = self._tk
-        row = len(self._cov_field_rows)
-        f = self._cov_fields_frame
-        lv = tk.StringVar(value=label)
-        wv = tk.IntVar(value=width)
-        le = self._ttk.Entry(f, textvariable=lv, width=16)
-        le.grid(row=row, column=0, padx=(0, 4), pady=1)
-        ws = self._ttk.Spinbox(f, from_=5, to=60, textvariable=wv, width=5)
-        ws.grid(row=row, column=1, pady=1)
-        self._cov_field_rows.append((lv, wv, le, ws))
-
-    def _del_cov_field(self):
-        if not self._cov_field_rows:
-            return
-        _, _, le, ws = self._cov_field_rows.pop()
-        le.destroy()
-        ws.destroy()
-
-    def _build_decl(self, p):
-        r = 0
+        r += 1
+        # -- 声明 --
+        r = self._sep(p, r)
         r = self._row_check(p, r, "启用声明页", self._v_decl_en)
         self._decl_widgets = []
         for idx, decl in enumerate(DEFAULT_CONFIG.get("declarations", [])):
@@ -508,24 +651,31 @@ class FormatterGUI:
             r += 1
             self._decl_widgets.append({"title": tv, "body": bt, "orig": decl})
 
-    def _build_advanced(self, p):
+    def _build_toc_ref(self, p):
         r = 0
+        self._ttk.Label(p, text="目录", font=("Microsoft YaHei UI", 10, "bold")).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        r += 1
         r = self._row_spin(p, r, "目录深度:", self._v_tocd, lo=1, hi=4, step=1, unit="级")
-        r = self._row_entry(p, r, "目录字体:", self._v_tocfont)
-        r = self._row_combo(p, r, "目录字号:", self._v_tocsz, self.PT_SIZES)
+        r = self._row_entry(p, r, "二级条目字体:", self._v_tocfont)
+        r = self._row_combo(p, r, "二级条目字号:", self._v_tocsz, self.PT_SIZES)
+        r = self._row_entry(p, r, "一级条目字体:", self._v_toc_h1font)
+        r = self._row_combo(p, r, "一级条目字号:", self._v_toc_h1sz, self.PT_SIZES)
         r = self._row_spin(p, r, "目录行距:", self._v_tocls, lo=1.0, hi=3.0, step=0.25, unit="倍")
+        r = self._row_spin(p, r, "条目段前:", self._v_toc_sb, lo=0, hi=5, step=0.5, unit="行")
+        r = self._row_spin(p, r, "条目段后:", self._v_toc_sa, lo=0, hi=5, step=0.5, unit="行")
         r = self._sep(p, r)
+        self._ttk.Label(p, text="参考文献", font=("Microsoft YaHei UI", 10, "bold")).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        r += 1
         r = self._row_spin(p, r, "参考文献缩进:", self._v_refind, lo=0, hi=100, step=1, unit="pt")
-        r = self._row_spin(p, r, "三线表 顶线:", self._v_tbl_top, lo=0.25, hi=6, step=0.25, unit="磅")
-        r = self._row_spin(p, r, "三线表 栏目线:", self._v_tbl_hdr, lo=0.25, hi=6, step=0.25, unit="磅")
-        r = self._row_spin(p, r, "三线表 底线:", self._v_tbl_bot, lo=0.25, hi=6, step=0.25, unit="磅")
-        r = self._row_combo(p, r, "前置页码:", self._v_pgfmt_f, self.PGFMT_LABELS)
-        r = self._row_combo(p, r, "正文页码:", self._v_pgfmt_b, self.PGFMT_LABELS)
         r = self._sep(p, r)
         # special titles
-        self._ttk.Label(p, text="特殊标题映射:").grid(row=r, column=0, sticky="nw", pady=3)
+        self._ttk.Label(p, text="特殊标题映射", font=("Microsoft YaHei UI", 10, "bold")).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        r += 1
         sf = self._ttk.Frame(p)
-        sf.grid(row=r, column=1, columnspan=2, sticky="w", padx=4, pady=3)
+        sf.grid(row=r, column=0, columnspan=3, sticky="w", padx=4, pady=3)
         self._st_frame = sf
         self._st_rows = []
         self._ttk.Label(sf, text="匹配").grid(row=0, column=0, padx=2)
@@ -533,9 +683,28 @@ class FormatterGUI:
         self._ttk.Label(sf, text="对齐").grid(row=0, column=2, padx=2)
         r += 1
         bf = self._ttk.Frame(p)
-        bf.grid(row=r, column=1, sticky="w", padx=4, pady=3)
+        bf.grid(row=r, column=0, columnspan=3, sticky="w", padx=4, pady=3)
         self._ttk.Button(bf, text="添加", width=6, command=self._add_st).pack(side="left")
         self._ttk.Button(bf, text="删除末行", width=8, command=self._del_st).pack(side="left", padx=4)
+
+    def _add_cov_field(self, label="", width=33):
+        tk = self._tk
+        row = len(self._cov_field_rows)
+        f = self._cov_fields_frame
+        lv = tk.StringVar(value=label)
+        wv = tk.IntVar(value=width)
+        le = self._ttk.Entry(f, textvariable=lv, width=16)
+        le.grid(row=row, column=0, padx=(0, 4), pady=1)
+        ws = self._ttk.Spinbox(f, from_=5, to=60, textvariable=wv, width=5)
+        ws.grid(row=row, column=1, pady=1)
+        self._cov_field_rows.append((lv, wv, le, ws))
+
+    def _del_cov_field(self):
+        if not self._cov_field_rows:
+            return
+        _, _, le, ws = self._cov_field_rows.pop()
+        le.destroy()
+        ws.destroy()
 
     def _add_st(self, match="", display="", align="center"):
         tk = self._tk
@@ -610,6 +779,13 @@ class FormatterGUI:
             self._panels[self._cur_panel].pack_forget()
         self._panels[name].pack(fill="both", expand=True)
         self._cur_panel = name
+        canvas = self._panel_canvas.get(name)
+        if canvas:
+            canvas.yview_moveto(0)
+            root = canvas.winfo_toplevel()
+            root.bind_all("<MouseWheel>",
+                          lambda e, c=canvas: c.yview_scroll(
+                              int(-1 * (e.delta / 120)), "units"))
 
     def _on_cat_select(self, _event=None):
         sel = self._cat_list.curselection()
@@ -641,19 +817,36 @@ class FormatterGUI:
         cfg["fonts"]["h3"] = self._v_fh3.get()
         cfg["fonts"]["h4"] = self._v_fh4.get()
         # sizes
-        cfg["sizes"]["body"] = self._numval(float(self._v_sbody.get()))
-        cfg["sizes"]["h1"] = self._numval(float(self._v_sh1.get()))
-        cfg["sizes"]["h2"] = self._numval(float(self._v_sh2.get()))
-        cfg["sizes"]["caption"] = self._numval(float(self._v_scap.get()))
-        cfg["sizes"]["footnote"] = self._numval(float(self._v_sfn.get()))
+        cfg["sizes"]["body"] = self._numval(float(self._v_sbody.get().replace("pt", "")))
+        cfg["sizes"]["h1"] = self._numval(float(self._v_sh1.get().replace("pt", "")))
+        cfg["sizes"]["h2"] = self._numval(float(self._v_sh2.get().replace("pt", "")))
+        cfg["sizes"]["h3"] = self._numval(float(self._v_sh3.get().replace("pt", "")))
+        cfg["sizes"]["h4"] = self._numval(float(self._v_sh4.get().replace("pt", "")))
+        cfg["sizes"]["caption"] = self._numval(float(self._v_scap.get().replace("pt", "")))
+        cfg["sizes"]["footnote"] = self._numval(float(self._v_sfn.get().replace("pt", "")))
         # headings
-        cfg["headings"]["h1"]["bold"] = self._v_h1b.get()
+        cfg["headings"]["h1"]["bold"] = self._BOLD.get(self._v_h1b.get(), True)
         cfg["headings"]["h1"]["align"] = self._ALIGN.get(self._v_h1a.get(), "left")
-        cfg["headings"]["h2"]["bold"] = self._v_h2b.get()
-        cfg["headings"]["h3"]["bold"] = self._v_h3b.get()
+        cfg["headings"]["h1"]["space_before"] = self._v_h1sb.get()
+        cfg["headings"]["h1"]["space_after"] = self._v_h1sa.get()
+        cfg["headings"]["h2"]["bold"] = self._BOLD.get(self._v_h2b.get(), True)
+        cfg["headings"]["h2"]["align"] = self._ALIGN.get(self._v_h2a.get(), "left")
+        cfg["headings"]["h2"]["space_before"] = self._v_h2sb.get()
+        cfg["headings"]["h2"]["space_after"] = self._v_h2sa.get()
+        cfg["headings"]["h3"]["bold"] = self._BOLD.get(self._v_h3b.get(), False)
+        cfg["headings"]["h3"]["align"] = self._ALIGN.get(self._v_h3a.get(), "left")
+        cfg["headings"]["h3"]["space_before"] = self._v_h3sb.get()
+        cfg["headings"]["h3"]["space_after"] = self._v_h3sa.get()
+        cfg["headings"]["h4"]["bold"] = self._BOLD.get(self._v_h4b.get(), False)
+        cfg["headings"]["h4"]["align"] = self._ALIGN.get(self._v_h4a.get(), "left")
+        cfg["headings"]["h4"]["space_before"] = self._v_h4sb.get()
+        cfg["headings"]["h4"]["space_after"] = self._v_h4sa.get()
         # body
         cfg["body"]["line_spacing"] = self._v_lsp.get()
         cfg["body"]["first_line_indent"] = self._numval(self._v_ind.get())
+        cfg["body"]["align"] = self._ALIGN.get(self._v_body_align.get(), "justify")
+        cfg["body"]["space_before"] = self._v_body_sb.get()
+        cfg["body"]["space_after"] = self._v_body_sa.get()
         # sections (heading numbering patterns)
         cfg["sections"]["chapter_pattern"] = self._v_pat_h1.get()
         cfg["sections"]["h2_pattern"] = self._v_pat_h2.get()
@@ -695,15 +888,49 @@ class FormatterGUI:
         # advanced
         cfg["toc"]["depth"] = self._v_tocd.get()
         cfg["toc"]["font"] = self._v_tocfont.get()
-        cfg["toc"]["font_size"] = self._numval(float(self._v_tocsz.get()))
+        cfg["toc"]["font_size"] = self._numval(float(self._v_tocsz.get().replace("pt", "")))
+        cfg["toc"]["h1_font"] = self._v_toc_h1font.get()
+        cfg["toc"]["h1_font_size"] = self._numval(float(self._v_toc_h1sz.get().replace("pt", "")))
         cfg["toc"]["line_spacing"] = self._v_tocls.get()
+        cfg["toc"]["space_before"] = self._v_toc_sb.get()
+        cfg["toc"]["space_after"] = self._v_toc_sa.get()
         cfg["references"]["left_indent"] = self._numval(self._v_refind.get())
         cfg["references"]["first_line_indent"] = -self._numval(self._v_refind.get())
         cfg["table"]["top_border_sz"] = self._numval(self._v_tbl_top.get() * 8)
         cfg["table"]["header_border_sz"] = self._numval(self._v_tbl_hdr.get() * 8)
         cfg["table"]["bottom_border_sz"] = self._numval(self._v_tbl_bot.get() * 8)
+        cfg["table"]["line_spacing"] = self._v_tbl_ls.get()
+        cfg["footnote"]["line_spacing"] = self._v_fn_ls.get()
+        # page_numbers
         cfg["page_numbers"]["front_format"] = self._PGFMT.get(self._v_pgfmt_f.get(), "upperRoman")
         cfg["page_numbers"]["body_format"] = self._PGFMT.get(self._v_pgfmt_b.get(), "decimal")
+        cfg["page_numbers"]["front_position"] = self._PGPOS.get(self._v_pn_fpos.get(), "center")
+        cfg["page_numbers"]["body_position"] = self._PGPOS.get(self._v_pn_bpos.get(), "center")
+        cfg["page_numbers"]["front_start"] = self._v_pn_fstart.get()
+        cfg["page_numbers"]["body_start"] = self._v_pn_bstart.get()
+        cfg["page_numbers"]["decorator"] = self._v_pn_deco.get()
+        cfg["page_numbers"]["font"] = self._v_pn_font.get()
+        cfg["page_numbers"]["bold"] = self._v_pn_bold.get()
+        cfg["sizes"]["page_number"] = self._numval(float(self._v_pn_size.get().replace("pt", "")))
+        # header_footer
+        cfg["header_footer"]["enabled"] = self._v_hf_en.get()
+        cfg["header_footer"]["scope"] = self._HF_SCOPE.get(self._v_hf_scope.get(), "body")
+        cfg["header_footer"]["different_odd_even"] = self._v_hf_diff_oe.get()
+        cfg["header_footer"]["first_page_no_header"] = self._v_hf_first_no.get()
+        cfg["header_footer"]["odd_page_text"] = "{chapter_title}" if self._v_hf_odd_chap.get() \
+            else self._v_hf_odd_text.get()
+        cfg["header_footer"]["even_page_text"] = "{chapter_title}" if self._v_hf_even_chap.get() \
+            else self._v_hf_even_text.get()
+        cfg["header_footer"]["font"] = self._v_hf_font.get()
+        cfg["header_footer"]["font_size"] = self._numval(float(self._v_hf_size.get().replace("pt", "")))
+        cfg["header_footer"]["bold"] = self._v_hf_bold.get()
+        cfg["header_footer"]["odd_page_align"] = self._ALIGN.get(self._v_hf_odd_align.get(), "center")
+        cfg["header_footer"]["even_page_align"] = self._ALIGN.get(self._v_hf_even_align.get(), "center")
+        cfg["header_footer"]["border_bottom"] = self._v_hf_border.get()
+        cfg["header_footer"]["border_bottom_width"] = self._v_hf_bwidth.get()
+        cfg["header_footer"]["border_bottom_style"] = self._BORDER_STYLE.get(self._v_hf_bstyle.get(), "single")
+        # front_matter
+        cfg["front_matter"] = {"mode": self._FM_MODE.get(self._v_fm_mode.get(), "auto")}
         cfg["special_titles"] = [
             {"match": m.get(), "display": d.get(),
              "align": self._ALIGN.get(a.get(), "center")}
@@ -728,19 +955,35 @@ class FormatterGUI:
         self._v_fh3.set(cfg["fonts"]["h3"])
         self._v_fh4.set(cfg["fonts"]["h4"])
         # sizes
-        self._v_sbody.set(str(self._numval(cfg["sizes"]["body"])))
-        self._v_sh1.set(str(self._numval(cfg["sizes"]["h1"])))
-        self._v_sh2.set(str(self._numval(cfg["sizes"]["h2"])))
-        self._v_scap.set(str(self._numval(cfg["sizes"]["caption"])))
-        self._v_sfn.set(str(self._numval(cfg["sizes"]["footnote"])))
+        self._v_sbody.set(str(self._numval(cfg["sizes"]["body"])) + "pt")
+        self._v_sh1.set(str(self._numval(cfg["sizes"]["h1"])) + "pt")
+        self._v_sh2.set(str(self._numval(cfg["sizes"]["h2"])) + "pt")
+        self._v_sh3.set(str(self._numval(cfg["sizes"]["h3"])) + "pt")
+        self._v_sh4.set(str(self._numval(cfg["sizes"]["h4"])) + "pt")
+        self._v_scap.set(str(self._numval(cfg["sizes"]["caption"])) + "pt")
+        self._v_sfn.set(str(self._numval(cfg["sizes"]["footnote"])) + "pt")
         # headings
-        self._v_h1b.set(cfg["headings"]["h1"]["bold"])
+        self._v_h1b.set(self._BOLD_R.get(cfg["headings"]["h1"]["bold"], "加粗"))
         self._v_h1a.set(self._ALIGN_R.get(cfg["headings"]["h1"]["align"], "左对齐"))
-        self._v_h2b.set(cfg["headings"]["h2"]["bold"])
-        self._v_h3b.set(cfg["headings"]["h3"]["bold"])
+        self._v_h1sb.set(cfg["headings"]["h1"].get("space_before", 0))
+        self._v_h1sa.set(cfg["headings"]["h1"].get("space_after", 0))
+        self._v_h2b.set(self._BOLD_R.get(cfg["headings"]["h2"]["bold"], "加粗"))
+        self._v_h2a.set(self._ALIGN_R.get(cfg["headings"]["h2"]["align"], "左对齐"))
+        self._v_h2sb.set(cfg["headings"]["h2"].get("space_before", 0))
+        self._v_h2sa.set(cfg["headings"]["h2"].get("space_after", 0))
+        self._v_h3b.set(self._BOLD_R.get(cfg["headings"]["h3"]["bold"], "不加粗"))
+        self._v_h3a.set(self._ALIGN_R.get(cfg["headings"]["h3"].get("align", "left"), "左对齐"))
+        self._v_h3sb.set(cfg["headings"]["h3"].get("space_before", 0))
+        self._v_h3sa.set(cfg["headings"]["h3"].get("space_after", 0))
+        self._v_h4b.set(self._BOLD_R.get(cfg["headings"]["h4"]["bold"], "不加粗"))
+        self._v_h4a.set(self._ALIGN_R.get(cfg["headings"]["h4"].get("align", "left"), "左对齐"))
+        self._v_h4sb.set(cfg["headings"]["h4"].get("space_before", 0))
+        self._v_h4sa.set(cfg["headings"]["h4"].get("space_after", 0))
         # body
         self._v_lsp.set(cfg["body"]["line_spacing"])
         self._v_ind.set(cfg["body"]["first_line_indent"])
+        self._v_body_sb.set(cfg["body"].get("space_before", 0))
+        self._v_body_sa.set(cfg["body"].get("space_after", 0))
         # heading numbering patterns
         sec = cfg.get("sections", {})
         self._v_pat_h1.set(sec.get("chapter_pattern", ""))
@@ -786,14 +1029,54 @@ class FormatterGUI:
         # advanced
         self._v_tocd.set(cfg["toc"]["depth"])
         self._v_tocfont.set(cfg["toc"].get("font", cfg["fonts"]["body"]))
-        self._v_tocsz.set(str(self._numval(cfg["toc"].get("font_size", cfg["sizes"]["body"]))))
+        self._v_tocsz.set(str(self._numval(cfg["toc"].get("font_size", cfg["sizes"]["body"]))) + "pt")
+        self._v_toc_h1font.set(cfg["toc"].get("h1_font", cfg["fonts"]["h1"]))
+        self._v_toc_h1sz.set(str(self._numval(cfg["toc"].get("h1_font_size", cfg["sizes"]["h1"]))) + "pt")
         self._v_tocls.set(cfg["toc"].get("line_spacing", cfg["body"]["line_spacing"]))
+        self._v_toc_sb.set(cfg["toc"].get("space_before", 0))
+        self._v_toc_sa.set(cfg["toc"].get("space_after", 0))
         self._v_refind.set(cfg["references"]["left_indent"])
         self._v_tbl_top.set(cfg["table"]["top_border_sz"] / 8)
         self._v_tbl_hdr.set(cfg["table"]["header_border_sz"] / 8)
         self._v_tbl_bot.set(cfg["table"]["bottom_border_sz"] / 8)
+        self._v_tbl_ls.set(cfg["table"].get("line_spacing", 1.0))
+        self._v_fn_ls.set(cfg["footnote"].get("line_spacing", 1.0))
+        # front_matter
+        fm = cfg.get("front_matter", {})
+        self._v_fm_mode.set(self._FM_MODE_R.get(fm.get("mode", "auto"), "自动识别"))
+        self._v_body_align.set(self._ALIGN_R.get(cfg["body"].get("align", "justify"), "两端对齐"))
         self._v_pgfmt_f.set(self._PGFMT_R.get(cfg["page_numbers"]["front_format"], "大写罗马"))
         self._v_pgfmt_b.set(self._PGFMT_R.get(cfg["page_numbers"]["body_format"], "阿拉伯数字"))
+        # page_numbers position
+        pn = cfg["page_numbers"]
+        self._v_pn_fpos.set(self._PGPOS_R.get(pn.get("front_position", "center"), "居中"))
+        self._v_pn_bpos.set(self._PGPOS_R.get(pn.get("body_position", "center"), "居中"))
+        self._v_pn_fstart.set(pn.get("front_start", 1))
+        self._v_pn_bstart.set(pn.get("body_start", 1))
+        self._v_pn_deco.set(pn.get("decorator", "{page}"))
+        self._v_pn_font.set(pn.get("font", ""))
+        self._v_pn_bold.set(pn.get("bold", False))
+        self._v_pn_size.set(str(self._numval(cfg["sizes"].get("page_number", 10.5))) + "pt")
+        # header_footer
+        hf = cfg.get("header_footer", {})
+        self._v_hf_en.set(hf.get("enabled", False))
+        self._v_hf_scope.set(self._HF_SCOPE_R.get(hf.get("scope", "body"), "仅正文"))
+        self._v_hf_diff_oe.set(hf.get("different_odd_even", True))
+        self._v_hf_first_no.set(hf.get("first_page_no_header", False))
+        _odd_raw = hf.get("odd_page_text", "")
+        _even_raw = hf.get("even_page_text", "")
+        self._v_hf_odd_chap.set("{chapter_title}" in _odd_raw)
+        self._v_hf_even_chap.set("{chapter_title}" in _even_raw)
+        self._v_hf_odd_text.set("" if _odd_raw == "{chapter_title}" else _odd_raw)
+        self._v_hf_even_text.set("" if _even_raw == "{chapter_title}" else _even_raw)
+        self._v_hf_font.set(hf.get("font", "宋体"))
+        self._v_hf_size.set(str(self._numval(hf.get("font_size", 10.5))) + "pt")
+        self._v_hf_bold.set(hf.get("bold", False))
+        self._v_hf_odd_align.set(self._ALIGN_R.get(hf.get("odd_page_align", "center"), "居中"))
+        self._v_hf_even_align.set(self._ALIGN_R.get(hf.get("even_page_align", "center"), "居中"))
+        self._v_hf_border.set(hf.get("border_bottom", True))
+        self._v_hf_bwidth.set(hf.get("border_bottom_width", 0.75))
+        self._v_hf_bstyle.set(self._BORDER_STYLE_R.get(hf.get("border_bottom_style", "single"), "单线"))
         # special titles
         while self._st_rows:
             self._del_st()

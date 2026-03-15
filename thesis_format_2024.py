@@ -46,7 +46,8 @@ def set_rfonts(rpr, east_asia, latin="Times New Roman"):
 def set_style_font(style, east_asia, size_pt, bold=False, latin="Times New Roman"):
     style.font.name = latin
     style.font.size = size_pt
-    style.font.bold = bold
+    if bold is not None:
+        style.font.bold = bold
     style.font.color.rgb = RGBColor(0, 0, 0)
     rpr = style.element.get_or_add_rPr()
     set_rfonts(rpr, east_asia, latin)
@@ -255,33 +256,58 @@ def normalize_sections(doc, cfg):
 # Page numbers
 # ---------------------------------------------------------------------------
 
-def add_page_number_field(paragraph, cfg):
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+def add_page_number_field(paragraph, cfg, align="center"):
+    paragraph.alignment = _ALIGN_MAP.get(align, WD_ALIGN_PARAGRAPH.CENTER)
     pn_size = Pt(cfg["sizes"]["page_number"])
-    latin = cfg["fonts"]["latin"]
+    pn_cfg = cfg["page_numbers"]
+    pn_font = pn_cfg.get("font", "") or cfg["fonts"]["latin"]
+    pn_bold = pn_cfg.get("bold", False)
     body_ea = cfg["fonts"]["body"]
+    decorator = pn_cfg.get("decorator", "{page}")
+    prefix, suffix = "", ""
+    if "{page}" in decorator:
+        parts = decorator.split("{page}", 1)
+        prefix, suffix = parts[0], parts[1]
+    elif decorator != "{page}":
+        prefix = ""
 
-    run = paragraph.add_run()
-    run.font.size = pn_size
-    run.font.name = latin
-    rpr = run._element.get_or_add_rPr()
-    set_rfonts(rpr, body_ea, latin)
+    def _pn_run(text=None):
+        r = paragraph.add_run(text) if text else paragraph.add_run()
+        r.font.size = pn_size
+        r.font.name = pn_font
+        r.font.bold = pn_bold
+        rpr = r._element.get_or_add_rPr()
+        set_rfonts(rpr, body_ea, pn_font)
+        return r
+
+    if prefix:
+        _pn_run(prefix)
+
+    run = _pn_run()
     fld_char_begin = OxmlElement("w:fldChar")
     fld_char_begin.set(qn("w:fldCharType"), "begin")
     run._element.append(fld_char_begin)
 
-    run2 = paragraph.add_run()
-    run2.font.size = pn_size
+    run2 = _pn_run()
     instr = OxmlElement("w:instrText")
     instr.set(qn("xml:space"), "preserve")
     instr.text = " PAGE "
     run2._element.append(instr)
 
-    run3 = paragraph.add_run()
-    run3.font.size = pn_size
+    run3 = _pn_run()
+    fld_sep = OxmlElement("w:fldChar")
+    fld_sep.set(qn("w:fldCharType"), "separate")
+    run3._element.append(fld_sep)
+
+    _pn_run("1")
+
+    run5 = _pn_run()
     fld_char_end = OxmlElement("w:fldChar")
     fld_char_end.set(qn("w:fldCharType"), "end")
-    run3._element.append(fld_char_end)
+    run5._element.append(fld_char_end)
+
+    if suffix:
+        _pn_run(suffix)
 
 
 def set_section_page_number_format(section, fmt="decimal", start=None):
@@ -320,8 +346,74 @@ def insert_page_break_after(paragraph):
     p_element.addnext(new_p)
 
 
+def _enable_even_odd_headers(section):
+    sect_pr = section._sectPr
+    existing = sect_pr.find(qn("w:titlePg"))
+    if existing is None:
+        sect_pr.append(OxmlElement("w:titlePg"))
+
+
+def _set_even_odd_on_doc(doc):
+    settings = doc.settings.element
+    if settings.find(qn("w:evenAndOddHeaders")) is None:
+        settings.append(OxmlElement("w:evenAndOddHeaders"))
+
+
+def _setup_single_section_pn(doc, cfg):
+    """Set up page numbers when there is only one section (no front/body split)."""
+    pn = cfg["page_numbers"]
+    body_pos = pn.get("body_position", "center")
+    body_odd = pn.get("body_odd_position", "right")
+    body_even = pn.get("body_even_position", "left")
+    need_alternate = body_pos == "alternate"
+    hf_diff_oe = cfg.get("header_footer", {}).get("different_odd_even", False) and \
+                 cfg.get("header_footer", {}).get("enabled", False)
+    need_even_odd = need_alternate or hf_diff_oe
+
+    section = doc.sections[0]
+    set_section_page_number_format(section, fmt=pn["body_format"], start=pn["body_start"])
+
+    if need_even_odd:
+        _set_even_odd_on_doc(doc)
+
+    footer = section.footer
+    footer.is_linked_to_previous = False
+    for p in footer.paragraphs:
+        p.clear()
+
+    if need_alternate:
+        fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        add_page_number_field(fp, cfg, align=body_odd)
+        even_footer = section.even_page_footer
+        even_footer.is_linked_to_previous = False
+        for p in even_footer.paragraphs:
+            p.clear()
+        ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
+        add_page_number_field(ep, cfg, align=body_even)
+    else:
+        actual_pos = body_pos if body_pos != "alternate" else "center"
+        fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        add_page_number_field(fp, cfg, align=actual_pos)
+        if need_even_odd:
+            even_footer = section.even_page_footer
+            even_footer.is_linked_to_previous = False
+            for p in even_footer.paragraphs:
+                p.clear()
+            ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
+            add_page_number_field(ep, cfg, align=actual_pos)
+
+
 def setup_page_numbers(doc, cfg):
     pn = cfg["page_numbers"]
+    front_pos = pn.get("front_position", "center")
+    body_pos = pn.get("body_position", "center")
+    body_odd = pn.get("body_odd_position", "right")
+    body_even = pn.get("body_even_position", "left")
+    need_alternate = body_pos == "alternate"
+    hf_diff_oe = cfg.get("header_footer", {}).get("different_odd_even", False) and \
+                 cfg.get("header_footer", {}).get("enabled", False)
+    need_even_odd = need_alternate or hf_diff_oe
+
     first_body_h1 = None
     for para in doc.paragraphs:
         if para.style and para.style.name == "Heading 1":
@@ -332,10 +424,12 @@ def setup_page_numbers(doc, cfg):
             break
 
     if first_body_h1 is None:
+        _setup_single_section_pn(doc, cfg)
         return
 
     new_sect_pr = insert_section_break_before(first_body_h1)
     if new_sect_pr is None:
+        _setup_single_section_pn(doc, cfg)
         return
 
     for attr in ["pgSz", "pgMar"]:
@@ -350,21 +444,215 @@ def setup_page_numbers(doc, cfg):
         set_section_page_number_format(
             doc.sections[-1], fmt=pn["body_format"], start=pn["body_start"])
 
-    for section in doc.sections:
+    if need_even_odd:
+        _set_even_odd_on_doc(doc)
+
+    for idx, section in enumerate(doc.sections):
+        is_body = idx == len(doc.sections) - 1 and len(doc.sections) > 1
+        pos = body_pos if is_body else front_pos
+
         footer = section.footer
         footer.is_linked_to_previous = False
         for p in footer.paragraphs:
             p.clear()
-        if footer.paragraphs:
-            add_page_number_field(footer.paragraphs[0], cfg)
+
+        if pos == "alternate" and is_body:
+            fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+            add_page_number_field(fp, cfg, align=body_odd)
+            even_footer = section.even_page_footer
+            even_footer.is_linked_to_previous = False
+            for p in even_footer.paragraphs:
+                p.clear()
+            ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
+            add_page_number_field(ep, cfg, align=body_even)
         else:
-            p = footer.add_paragraph()
-            add_page_number_field(p, cfg)
+            actual_pos = pos if pos != "alternate" else "center"
+            fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+            add_page_number_field(fp, cfg, align=actual_pos)
+            if need_even_odd:
+                even_footer = section.even_page_footer
+                even_footer.is_linked_to_previous = False
+                for p in even_footer.paragraphs:
+                    p.clear()
+                ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
+                add_page_number_field(ep, cfg, align=actual_pos)
+
+
+# ---------------------------------------------------------------------------
+# Headers (页眉)
+# ---------------------------------------------------------------------------
+
+def _add_header_border(paragraph, width_pt=0.75, style="single"):
+    pPr = paragraph._element.get_or_add_pPr()
+    pBdr = pPr.find(qn("w:pBdr"))
+    if pBdr is None:
+        pBdr = OxmlElement("w:pBdr")
+        pPr.append(pBdr)
+    bottom = OxmlElement("w:bottom")
+    sz = int(width_pt * 8)
+    val = "double" if style == "double" else "single"
+    bottom.set(qn("w:val"), val)
+    bottom.set(qn("w:sz"), str(sz))
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), "000000")
+    pBdr.append(bottom)
+
+
+def _render_header_para(paragraph, text, cfg, hf_cfg, doc, align="center"):
+    paragraph.alignment = _ALIGN_MAP.get(align, WD_ALIGN_PARAGRAPH.CENTER)
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    rendered = text
+    if "{chapter_title}" in rendered:
+        rendered_prefix, rendered_suffix = rendered.split("{chapter_title}", 1)
+        paragraph.clear()
+
+        # Chinese Word displays "Heading 1" as "标题 1" in the UI;
+        # STYLEREF matches by display name, so use the Chinese name.
+        # Also add "标题 1" as alias to ensure STYLEREF can find it.
+        for sty in doc.styles:
+            if sty.style_id == "Heading1" or sty.name == "Heading 1":
+                name_el = sty.element.find(qn("w:name"))
+                if name_el is not None:
+                    aliases_el = sty.element.find(qn("w:aliases"))
+                    if aliases_el is None:
+                        aliases_el = OxmlElement("w:aliases")
+                        name_el.addnext(aliases_el)
+                    existing = aliases_el.get(qn("w:val"), "")
+                    if "标题 1" not in existing:
+                        new_val = ("标题 1," + existing) if existing else "标题 1"
+                        aliases_el.set(qn("w:val"), new_val)
+                break
+        h1_style_name = "标题 1"
+
+        def _hf_run(txt=None):
+            r = paragraph.add_run(txt) if txt else paragraph.add_run()
+            set_run_font(r, east_asia=hf_cfg["font"],
+                         size_pt=Pt(hf_cfg["font_size"]),
+                         bold=hf_cfg.get("bold", False),
+                         latin=cfg["fonts"]["latin"])
+            return r
+
+        if rendered_prefix:
+            _hf_run(rendered_prefix)
+        r1 = _hf_run()
+        begin = OxmlElement("w:fldChar")
+        begin.set(qn("w:fldCharType"), "begin")
+        r1._element.append(begin)
+        r2 = _hf_run()
+        instr = OxmlElement("w:instrText")
+        instr.set(qn("xml:space"), "preserve")
+        instr.text = f' STYLEREF "{h1_style_name}" '
+        r2._element.append(instr)
+        r3 = _hf_run()
+        sep = OxmlElement("w:fldChar")
+        sep.set(qn("w:fldCharType"), "separate")
+        r3._element.append(sep)
+        _hf_run("(章标题)")
+        r5 = _hf_run()
+        end = OxmlElement("w:fldChar")
+        end.set(qn("w:fldCharType"), "end")
+        r5._element.append(end)
+        if rendered_suffix:
+            _hf_run(rendered_suffix)
+    else:
+        paragraph.clear()
+        r = paragraph.add_run(rendered)
+        set_run_font(r, east_asia=hf_cfg["font"],
+                     size_pt=Pt(hf_cfg["font_size"]),
+                     bold=hf_cfg.get("bold", False),
+                     latin=cfg["fonts"]["latin"])
+    if hf_cfg.get("border_bottom", False):
+        _add_header_border(paragraph,
+                           hf_cfg.get("border_bottom_width", 0.75),
+                           hf_cfg.get("border_bottom_style", "single"))
+
+
+def setup_headers(doc, cfg):
+    hf = cfg.get("header_footer", {})
+    if not hf.get("enabled", False):
+        return
+    scope = hf.get("scope", "body")
+    diff_oe = hf.get("different_odd_even", True)
+    first_no = hf.get("first_page_no_header", False)
+    odd_align = hf.get("odd_page_align", "center")
+    even_align = hf.get("even_page_align", "center")
+
+    if diff_oe:
+        _set_even_odd_on_doc(doc)
+    doc_has_even_odd = doc.settings.element.find(qn("w:evenAndOddHeaders")) is not None
+
+    for idx, section in enumerate(doc.sections):
+        is_front = idx == 0 and len(doc.sections) > 1
+        if scope == "body" and is_front:
+            continue
+
+        if first_no:
+            sect_pr = section._sectPr
+            if sect_pr.find(qn("w:titlePg")) is None:
+                sect_pr.append(OxmlElement("w:titlePg"))
+
+        header = section.header
+        header.is_linked_to_previous = False
+        for p in header.paragraphs:
+            p.clear()
+        hp = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        _render_header_para(hp, hf["odd_page_text"], cfg, hf, doc, align=odd_align)
+
+        if doc_has_even_odd:
+            even_header = section.even_page_header
+            even_header.is_linked_to_previous = False
+            for p in even_header.paragraphs:
+                p.clear()
+            ep = even_header.paragraphs[0] if even_header.paragraphs else even_header.add_paragraph()
+            even_text = hf["even_page_text"] if diff_oe else hf["odd_page_text"]
+            even_a = even_align if diff_oe else odd_align
+            _render_header_para(ep, even_text, cfg, hf, doc, align=even_a)
+
+        if first_no:
+            first_header = section.first_page_header
+            first_header.is_linked_to_previous = False
+            for p in first_header.paragraphs:
+                p.clear()
+            # Preserve first-page footer (page number) by unlinking it
+            first_footer = section.first_page_footer
+            first_footer.is_linked_to_previous = False
 
 
 # ---------------------------------------------------------------------------
 # Special title helpers
 # ---------------------------------------------------------------------------
+
+def _detect_front_matter(doc, cfg):
+    """Detect whether the document has front matter (abstract/keywords) before first H1."""
+    sec = cfg.get("sections", {})
+    cn_kw_re = sec.get("cn_keywords_pattern", r"^\s*关键词\s*[：:]")
+    en_abs_re = sec.get("en_abstract_pattern", r"(?i)^\s*Abstract\s*[：:]")
+    toc_display = _find_special_display(cfg, "目录", raw=True)
+
+    first_h1_idx = None
+    for i, para in enumerate(doc.paragraphs):
+        if is_heading(para, 1):
+            t = para.text.strip().replace(" ", "").replace("\u3000", "")
+            if t == toc_display:
+                continue
+            first_h1_idx = i
+            break
+
+    if first_h1_idx is None or first_h1_idx == 0:
+        return False
+
+    for para in doc.paragraphs[:first_h1_idx]:
+        t = para.text.strip()
+        t_nospace = t.replace(" ", "").replace("\u3000", "")
+        if t_nospace == "摘要":
+            return True
+        if re.match(cn_kw_re, t):
+            return True
+        if re.match(en_abs_re, t):
+            return True
+    return False
+
 
 def _find_special_display(cfg, match_text, raw=False):
     """Find special title display text for a match keyword.
@@ -532,6 +820,8 @@ def ensure_toc_styles(doc, cfg):
     toc_cfg = cfg["toc"]
     toc_font = toc_cfg.get("font", cfg["fonts"]["body"])
     toc_sz_hp = str(int(toc_cfg.get("font_size", cfg["sizes"]["body"]) * 2))
+    toc_h1_font = toc_cfg.get("h1_font", cfg["fonts"]["h1"])
+    toc_h1_sz_hp = str(int(toc_cfg.get("h1_font_size", cfg["sizes"]["h1"]) * 2))
     latin = cfg["fonts"]["latin"]
 
     styles_el = doc.styles.element
@@ -540,6 +830,8 @@ def ensure_toc_styles(doc, cfg):
 
     for i in range(1, toc_depth + 1):
         style_id = f"TOC{i}"
+        ea = toc_h1_font if i == 1 else toc_font
+        sz_hp = toc_h1_sz_hp if i == 1 else toc_sz_hp
         found = styles_el.find(f'.//w:style[@w:styleId="{style_id}"]', ns)
         if found is not None:
             rpr = found.find("w:rPr", ns)
@@ -555,17 +847,17 @@ def ensure_toc_styles(doc, cfg):
                     del rfonts.attrib[qn(theme)]
             rfonts.set(qn("w:ascii"), latin)
             rfonts.set(qn("w:hAnsi"), latin)
-            rfonts.set(qn("w:eastAsia"), toc_font)
+            rfonts.set(qn("w:eastAsia"), ea)
             sz = rpr.find("w:sz", ns)
             if sz is None:
                 sz = OxmlElement("w:sz")
                 rpr.append(sz)
-            sz.set(qn("w:val"), toc_sz_hp)
+            sz.set(qn("w:val"), sz_hp)
             szCs = rpr.find("w:szCs", ns)
             if szCs is None:
                 szCs = OxmlElement("w:szCs")
                 rpr.append(szCs)
-            szCs.set(qn("w:val"), toc_sz_hp)
+            szCs.set(qn("w:val"), sz_hp)
             continue
 
         style_el = OxmlElement("w:style")
@@ -595,13 +887,13 @@ def ensure_toc_styles(doc, cfg):
         rfonts = OxmlElement("w:rFonts")
         rfonts.set(qn("w:ascii"), latin)
         rfonts.set(qn("w:hAnsi"), latin)
-        rfonts.set(qn("w:eastAsia"), toc_font)
+        rfonts.set(qn("w:eastAsia"), ea)
         rpr.append(rfonts)
         sz = OxmlElement("w:sz")
-        sz.set(qn("w:val"), toc_sz_hp)
+        sz.set(qn("w:val"), sz_hp)
         rpr.append(sz)
         szCs = OxmlElement("w:szCs")
-        szCs.set(qn("w:val"), toc_sz_hp)
+        szCs.set(qn("w:val"), sz_hp)
         rpr.append(szCs)
         color = OxmlElement("w:color")
         color.set(qn("w:val"), "000000")
@@ -1109,6 +1401,20 @@ def validate_structure(doc, cfg):
 # Heading auto-renumbering
 # ---------------------------------------------------------------------------
 
+_CN_NUMERALS = "零一二三四五六七八九十"
+
+
+def _int_to_cn(n):
+    """Convert integer (1-99) to Chinese numeral."""
+    if n <= 10:
+        return _CN_NUMERALS[n]
+    if n < 20:
+        return "十" + (_CN_NUMERALS[n - 10] if n > 10 else "")
+    tens, ones = divmod(n, 10)
+    return (_CN_NUMERALS[tens] if tens > 1 else "") + "十" + \
+           (_CN_NUMERALS[ones] if ones else "")
+
+
 def _renumber_h1_text(text, new_num, pattern):
     """Replace the chapter number in an H1 heading text."""
     # "第X章" style
@@ -1117,6 +1423,10 @@ def _renumber_h1_text(text, new_num, pattern):
     # "Chapter X" style
     if re.search(r"(?i)Chapter\s+\d+", text):
         return re.sub(r"(?i)(Chapter\s+)\d+", fr"\g<1>{new_num}", text, count=1)
+    # Chinese numeral style "一、绪论"
+    if re.match(r"^[一二三四五六七八九十百]+、", text):
+        cn = _int_to_cn(new_num)
+        return re.sub(r"^[一二三四五六七八九十百]+", cn, text, count=1)
     # Plain number style "X title"
     if re.match(r"^\d+\s", text):
         return re.sub(r"^\d+", str(new_num), text, count=1)
@@ -1124,7 +1434,10 @@ def _renumber_h1_text(text, new_num, pattern):
 
 
 def _renumber_sub_text(text, prefix):
-    """Replace X.Y[.Z[.W]] numbering prefix in sub-heading text."""
+    """Replace X.Y[.Z[.W]] or Chinese numeral sub-heading prefix."""
+    # Chinese numeral H2: （一）xxx
+    if re.match(r"^（[一二三四五六七八九十百]+）", text):
+        return re.sub(r"^（[一二三四五六七八九十百]+）", prefix, text, count=1)
     return re.sub(r"^[\d.]+", prefix, text, count=1)
 
 
@@ -1248,21 +1561,109 @@ def normalize_heading_spacing(doc, cfg):
         if sn in ("Heading 1", "样式1"):
             if t_nospace in st_map:
                 continue
+            # "第X章 xxx"
             m = re.match(r"(第\s*\d+\s*章)\s*(.*)", t)
             if m and m.group(2):
                 new_t = m.group(1) + JIJU + m.group(2)
+            # "Chapter X xxx"
+            if new_t is None:
+                m = re.match(r"((?i)Chapter\s+\d+)\s+(.*)", t)
+                if m and m.group(2):
+                    new_t = m.group(1) + JIJU + m.group(2)
+            # "一、xxx"
+            if new_t is None:
+                m = re.match(r"([一二三四五六七八九十百]+、)\s*(.*)", t)
+                if m and m.group(2):
+                    new_t = m.group(1) + JIJU + m.group(2)
+            # "1 xxx" (pure number)
+            if new_t is None:
+                m = re.match(r"(\d+)\s+(.*)", t)
+                if m and m.group(2):
+                    new_t = m.group(1) + JIJU + m.group(2)
         elif sn in ("Heading 2", "Heading 3", "Heading 4"):
-            m = re.match(r"([\d.]+)\s*(.*)", t)
+            # "（一）xxx"
+            m = re.match(r"(（[一二三四五六七八九十百]+）)\s*(.*)", t)
             if m and m.group(2):
                 new_t = m.group(1) + JIJU + m.group(2)
+            # numeric: "1.1 xxx", "1.1.1 xxx", "1. xxx"
+            if new_t is None:
+                m = re.match(r"([\d.]+)\s*(.*)", t)
+                if m and m.group(2):
+                    new_t = m.group(1) + JIJU + m.group(2)
+            # "(1)xxx"
+            if new_t is None:
+                m = re.match(r"(\(\d+\))\s*(.*)", t)
+                if m and m.group(2):
+                    new_t = m.group(1) + JIJU + m.group(2)
 
         if new_t is not None and new_t != t:
             _replace_para_text(para, new_t)
 
 
 # ---------------------------------------------------------------------------
-# Citation / Reference cross-check
+# Auto-assign heading styles for docx input
 # ---------------------------------------------------------------------------
+
+_SENTENCE_ENDINGS = set("。！？；")
+
+
+def auto_assign_heading_styles(doc, cfg):
+    """Detect headings in Normal-style paragraphs and assign Heading styles."""
+    sec = cfg.get("sections", {})
+    chap_re = re.compile(sec.get("chapter_pattern", r"^第\s*\d+\s*章\b"))
+    appendix_re = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
+    h2_re = re.compile(sec.get("h2_pattern", r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
+    h3_re = re.compile(sec.get("h3_pattern", r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
+    h4_re = re.compile(sec.get("h4_pattern", r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
+
+    st_map = _get_special_title_map(cfg)
+    special_h1_set = set()
+    for s in sec.get("special_h1", []):
+        special_h1_set.add(s.replace(" ", "").replace("\u3000", ""))
+    special_h1_set.update(st_map.keys())
+
+    _skip_styles = {"Heading 1", "Heading 2", "Heading 3", "Heading 4", "样式1"}
+
+    changes = []
+    for para in doc.paragraphs:
+        sn = para.style.name if para.style else ""
+        if sn in _skip_styles:
+            continue
+        t = para.text.strip()
+        if not t:
+            continue
+        t_nospace = t.replace(" ", "").replace("\u3000", "")
+
+        target = None
+
+        # H1: 第X章
+        if chap_re.match(t):
+            target = "Heading 1"
+        # H1: special titles (摘要, 参考文献, 致谢, etc.)
+        elif t_nospace in special_h1_set:
+            target = "Heading 1"
+        # H1: 附录X
+        elif appendix_re.match(t):
+            target = "Heading 1"
+        # H1: pure number "1 绪论" or "2文献综述"
+        elif re.match(r"^\d+(\s|(?=[\u4e00-\u9fff]))", t) and not re.match(r"^\d+\.\d+", t):
+            if len(t) <= 50 and t[-1] not in _SENTENCE_ENDINGS:
+                target = "Heading 1"
+        else:
+            # H4/H3/H2: short title guard
+            if len(t) <= 50 and t[-1] not in _SENTENCE_ENDINGS:
+                if h4_re.match(t):
+                    target = "Heading 4"
+                elif h3_re.match(t):
+                    target = "Heading 3"
+                elif h2_re.match(t):
+                    target = "Heading 2"
+
+        if target and target in [s.name for s in doc.styles]:
+            para.style = doc.styles[target]
+            changes.append(f"  {target}: \"{t}\"")
+
+    return changes
 
 _CITE_NUM_RE = re.compile(r'\[(\d+(?:\s*[,，\-–]\s*\d+)*)\]')
 _CITE_AY_OUTER = re.compile(r'[（(](.+?)[）)]')
@@ -1806,7 +2207,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     body_size = Pt(cfg["sizes"]["body"])
     body_ls = cfg["body"]["line_spacing"]
     body_indent = Pt(cfg["body"]["first_line_indent"])
-    body_align = _ALIGN_MAP.get(cfg["body"]["align"], WD_ALIGN_PARAGRAPH.JUSTIFY)
+    body_align = _ALIGN_MAP.get(cfg["body"]["align"])  # None when "keep"
 
     h1_font = cfg["fonts"]["h1"]
     h1_size = Pt(cfg["sizes"]["h1"])
@@ -1817,14 +2218,17 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     h4_font = cfg["fonts"]["h4"]
     h4_size = Pt(cfg["sizes"]["h4"])
 
-    h1_bold = cfg["headings"]["h1"]["bold"]
-    h1_align = _ALIGN_MAP.get(cfg["headings"]["h1"]["align"], WD_ALIGN_PARAGRAPH.LEFT)
-    h2_bold = cfg["headings"]["h2"]["bold"]
-    h2_align = _ALIGN_MAP.get(cfg["headings"]["h2"]["align"], WD_ALIGN_PARAGRAPH.LEFT)
-    h3_bold = cfg["headings"]["h3"]["bold"]
-    h3_align = _ALIGN_MAP.get(cfg["headings"]["h3"]["align"], WD_ALIGN_PARAGRAPH.LEFT)
-    h4_bold = cfg["headings"]["h4"]["bold"]
-    h4_align = _ALIGN_MAP.get(cfg["headings"]["h4"]["align"], WD_ALIGN_PARAGRAPH.LEFT)
+    def _bold_val(v):
+        return None if v == "keep" else v
+
+    h1_bold = _bold_val(cfg["headings"]["h1"]["bold"])
+    h1_align = _ALIGN_MAP.get(cfg["headings"]["h1"]["align"])
+    h2_bold = _bold_val(cfg["headings"]["h2"]["bold"])
+    h2_align = _ALIGN_MAP.get(cfg["headings"]["h2"]["align"])
+    h3_bold = _bold_val(cfg["headings"]["h3"]["bold"])
+    h3_align = _ALIGN_MAP.get(cfg["headings"]["h3"]["align"])
+    h4_bold = _bold_val(cfg["headings"]["h4"]["bold"])
+    h4_align = _ALIGN_MAP.get(cfg["headings"]["h4"]["align"])
 
     caption_size = Pt(cfg["sizes"]["caption"])
     note_size = Pt(cfg["sizes"]["note"])
@@ -1836,15 +2240,24 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     toc_key = "目录"
 
     doc = Document(input_path)
+
+    # Auto-detect headings in Normal-style paragraphs
+    auto_changes = auto_assign_heading_styles(doc, cfg)
+    if auto_changes:
+        print(f"自动识别标题 ({len(auto_changes)} 个):", file=sys.stderr)
+        for c in auto_changes:
+            print(c, file=sys.stderr)
+
     try:
         validate_structure(doc, cfg)
     except Exception as exc:
         print(f"结构检查出错（已跳过，继续排版）: {exc}", file=sys.stderr)
     normalize_sections(doc, cfg)
 
-    # Auto-renumber headings if enabled
+    # Auto-renumber headings if enabled (skip when auto-assign detected headings,
+    # because auto-assign preserves original numbering from the document)
     renum_changes = []
-    if sec.get("renumber_headings", False):
+    if sec.get("renumber_headings", False) and not auto_changes:
         renum_changes = renumber_headings(doc, cfg)
 
     # Normalize heading number-to-title spacing (1字距)
@@ -1856,51 +2269,57 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             set_style_font(doc.styles[style_name], east_asia=body_font,
                            size_pt=body_size, bold=False, latin=latin)
 
-    if "Heading 1" in doc.styles:
-        st = doc.styles["Heading 1"]
-        set_style_font(st, east_asia=h1_font, size_pt=h1_size, bold=h1_bold, latin=latin)
-        st.paragraph_format.alignment = h1_align
-        st.paragraph_format.space_before = Pt(0)
-        st.paragraph_format.space_after = Pt(0)
-    if "Heading 2" in doc.styles:
-        st = doc.styles["Heading 2"]
-        set_style_font(st, east_asia=h2_font, size_pt=h2_size, bold=h2_bold, latin=latin)
-        st.paragraph_format.alignment = h2_align
-        st.paragraph_format.space_before = Pt(0)
-        st.paragraph_format.space_after = Pt(0)
-    if "Heading 3" in doc.styles:
-        st = doc.styles["Heading 3"]
-        set_style_font(st, east_asia=h3_font, size_pt=h3_size, bold=h3_bold, latin=latin)
-        st.paragraph_format.alignment = h3_align
-        st.paragraph_format.space_before = Pt(0)
-        st.paragraph_format.space_after = Pt(0)
-    if "Heading 4" in doc.styles:
-        st = doc.styles["Heading 4"]
-        set_style_font(st, east_asia=h4_font, size_pt=h4_size, bold=h4_bold, latin=latin)
-        st.paragraph_format.alignment = h4_align
-        st.paragraph_format.space_before = Pt(0)
-        st.paragraph_format.space_after = Pt(0)
+    def _set_heading_style(style_name, font, size, bold, align, hcfg):
+        if style_name not in doc.styles:
+            return
+        st = doc.styles[style_name]
+        set_style_font(st, east_asia=font, size_pt=size, bold=bold, latin=latin)
+        if align is not None:
+            st.paragraph_format.alignment = align
+        sb = hcfg.get("space_before", 0)
+        sa = hcfg.get("space_after", 0)
+        if sb >= 0:
+            st.paragraph_format.space_before = Pt(sb * 12)
+        if sa >= 0:
+            st.paragraph_format.space_after = Pt(sa * 12)
+
+    _set_heading_style("Heading 1", h1_font, h1_size, h1_bold, h1_align, cfg["headings"]["h1"])
+    _set_heading_style("Heading 2", h2_font, h2_size, h2_bold, h2_align, cfg["headings"]["h2"])
+    _set_heading_style("Heading 3", h3_font, h3_size, h3_bold, h3_align, cfg["headings"]["h3"])
+    _set_heading_style("Heading 4", h4_font, h4_size, h4_bold, h4_align, cfg["headings"]["h4"])
 
     if "TOC Heading" in doc.styles:
         st = doc.styles["TOC Heading"]
-        set_style_font(st, east_asia=h1_font, size_pt=h1_size, bold=True, latin=latin)
+        toc_h_font = cfg["toc"].get("h1_font", h1_font)
+        toc_h_size = Pt(cfg["toc"].get("h1_font_size", cfg["sizes"]["h1"]))
+        set_style_font(st, east_asia=toc_h_font, size_pt=toc_h_size, bold=True, latin=latin)
         st.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        st.paragraph_format.space_before = Pt(0)
-        st.paragraph_format.space_after = Pt(0)
+        _toc_h_sb = cfg["toc"].get("space_before", 0)
+        _toc_h_sa = cfg["toc"].get("space_after", 0)
+        st.paragraph_format.space_before = Pt(_toc_h_sb * 12)
+        st.paragraph_format.space_after = Pt(_toc_h_sa * 12)
 
     ensure_toc_styles(doc, cfg)
 
     toc_content_font = cfg["toc"].get("font", body_font)
     toc_content_size = Pt(cfg["toc"].get("font_size", cfg["sizes"]["body"]))
+    toc_h1_font = cfg["toc"].get("h1_font", cfg["fonts"]["h1"])
+    toc_h1_size = Pt(cfg["toc"].get("h1_font_size", cfg["sizes"]["h1"]))
     toc_content_ls = cfg["toc"].get("line_spacing", body_ls)
+    toc_sb = Pt(cfg["toc"].get("space_before", 0) * 12)
+    toc_sa = Pt(cfg["toc"].get("space_after", 0) * 12)
 
     for para in doc.paragraphs:
         sn = para.style.name if para.style else ""
         if sn.lower().startswith("toc ") or sn == "样式3":
+            is_toc1 = sn.lower() == "toc 1"
             para.paragraph_format.first_line_indent = Pt(0)
             para.paragraph_format.line_spacing = toc_content_ls
-            zero_spacing(para)
-            set_para_runs_font(para, east_asia=toc_content_font, size_pt=toc_content_size,
+            para.paragraph_format.space_before = toc_sb
+            para.paragraph_format.space_after = toc_sa
+            ea = toc_h1_font if is_toc1 else toc_content_font
+            sz = toc_h1_size if is_toc1 else toc_content_size
+            set_para_runs_font(para, east_asia=ea, size_pt=sz,
                                bold=False, latin=latin)
 
     for name in ["Footnote Text", "Footnote Reference"]:
@@ -1911,7 +2330,9 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         ft = doc.styles["Footnote Text"]
         ft.paragraph_format.line_spacing = cfg["footnote"]["line_spacing"]
         ft.paragraph_format.first_line_indent = Pt(0)
-        ft.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        _fn_align = _ALIGN_MAP.get(cfg["footnote"].get("align", "justify"))
+        if _fn_align is not None:
+            ft.paragraph_format.alignment = _fn_align
 
     for name in ["Hyperlink", "超链接"]:
         if name in [s.name for s in doc.styles]:
@@ -1920,125 +2341,160 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             st.font.underline = False
 
     # Global paragraph defaults
+    _heading_styles = {"Heading 1", "Heading 2", "Heading 3", "Heading 4", "样式1"}
     for para in doc.paragraphs:
-        zero_spacing(para)
+        sn = para.style.name if para.style else ""
+        if sn.lower().startswith("toc ") or sn in ("样式3", "TOC Heading"):
+            continue  # TOC entries already formatted above
+        if sn in _heading_styles:
+            # Headings: only zero spacing if config doesn't say "keep original" (-1)
+            hkey = {"Heading 1": "h1", "样式1": "h1", "Heading 2": "h2",
+                    "Heading 3": "h3", "Heading 4": "h4"}.get(sn, "h1")
+            hcfg = cfg["headings"].get(hkey, {})
+            if hcfg.get("space_before", 0) >= 0:
+                para.paragraph_format.space_before = Pt(0)
+            if hcfg.get("space_after", 0) >= 0:
+                para.paragraph_format.space_after = Pt(0)
+        else:
+            para.paragraph_format.space_before = Pt(cfg["body"].get("space_before", 0) * 12)
+            para.paragraph_format.space_after = Pt(cfg["body"].get("space_after", 0) * 12)
         pf = para.paragraph_format
         if para.style and para.style.name in ["Normal", "Body Text", "First Paragraph", "_Style 2"]:
-            pf.alignment = body_align
+            if body_align is not None:
+                pf.alignment = body_align
             pf.first_line_indent = body_indent
             pf.line_spacing = body_ls
             set_para_runs_font(para, east_asia=body_font, size_pt=body_size,
                                bold=False, latin=latin)
 
     # Front matter
-    first_h1_idx = None
-    for i, para in enumerate(doc.paragraphs):
-        if is_heading(para, 1):
-            first_h1_idx = i
-            break
-    if first_h1_idx is None:
-        first_h1_idx = len(doc.paragraphs)
-
-    front = doc.paragraphs[:first_h1_idx]
-    non_empty = [p for p in front if p.text.strip()]
-
-    if non_empty:
-        abstract_display = _find_special_display(cfg, "摘要")
-        p = non_empty[0]
-        p.text = abstract_display
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p.paragraph_format.first_line_indent = Pt(0)
-        p.paragraph_format.line_spacing = body_ls
-        set_para_runs_font(p, east_asia=h1_font, size_pt=h1_size, bold=True, latin=latin)
+    fm_mode = cfg.get("front_matter", {}).get("mode", "auto")
+    has_fm = (fm_mode == "format") or \
+             (fm_mode == "auto" and _detect_front_matter(doc, cfg))
 
     cn_kw_para = None
     en_kw_para = None
-    cn_kw_re = sec.get("cn_keywords_pattern", r"^\s*关键词\s*[：:]")
-    en_abs_re = sec.get("en_abstract_pattern", r"(?i)^\s*Abstract\s*[：:]")
-    en_kw_re = sec.get("en_keywords_pattern", r"(?i)^\s*Key\s*words\s*[：:]")
 
-    past_abstract = False  # after Abstract: line, English text = body (not title)
-    en_title_seen = False  # after English title, next short non-CJK = author name
+    if has_fm:
+        first_h1_idx = None
+        for i, para in enumerate(doc.paragraphs):
+            if is_heading(para, 1):
+                first_h1_idx = i
+                break
+        if first_h1_idx is None:
+            first_h1_idx = len(doc.paragraphs)
 
-    for p in non_empty[1:]:
-        t = p.text.strip()
-        if t.startswith("关键词"):
-            cn_kw_para = p
-            normalized = normalize_cn_keywords(t) or t
-            content = normalized.split("：", 1)[1] if "：" in normalized else ""
-            p.clear()
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            p.paragraph_format.first_line_indent = Pt(0)
-            p.paragraph_format.line_spacing = body_ls
-            r1 = p.add_run("关键词：")
-            set_run_font(r1, east_asia=h1_font, size_pt=body_size, bold=True, latin=latin)
-            r2 = p.add_run(content)
-            set_run_font(r2, east_asia=body_font, size_pt=body_size, bold=False, latin=latin)
-        elif re.match(r"^\s*Abstract\s*:", t, flags=re.I):
-            past_abstract = True
-            content = re.sub(r"^\s*Abstract\s*:\s*", "", t, flags=re.I)
-            p.clear()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            p.paragraph_format.first_line_indent = Pt(0)
-            p.paragraph_format.line_spacing = body_ls
-            r1 = p.add_run("Abstract: ")
-            set_run_font(r1, east_asia=latin, size_pt=body_size, bold=True, latin=latin)
-            r2 = p.add_run(content)
-            set_run_font(r2, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
-        elif re.match(r"^\s*Key\s*words\s*:", t, flags=re.I):
-            en_kw_para = p
-            normalized = normalize_en_keywords(t) or t
-            content = re.sub(r"^\s*Key\s*words\s*:\s*", "", normalized, flags=re.I)
-            p.clear()
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            p.paragraph_format.first_line_indent = Pt(0)
-            p.paragraph_format.line_spacing = body_ls
-            r1 = p.add_run("Key words: ")
-            set_run_font(r1, east_asia=latin, size_pt=body_size, bold=True, latin=latin)
-            r2 = p.add_run(content)
-            set_run_font(r2, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
-        elif not past_abstract and not contains_cjk(t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*:", t, re.I) and len(t) > 20 and not re.match(r"^[\(（]", t):
-            en_title_seen = True
+        front = doc.paragraphs[:first_h1_idx]
+        non_empty = [p for p in front if p.text.strip()]
+
+        if non_empty:
+            abstract_display = _find_special_display(cfg, "摘要")
+            p = non_empty[0]
+            p.text = abstract_display
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p.paragraph_format.first_line_indent = Pt(0)
             p.paragraph_format.line_spacing = body_ls
-            set_para_runs_font(p, east_asia=latin, size_pt=h1_size, bold=True, latin=latin)
-        elif not past_abstract and en_title_seen and not contains_cjk(t) and not re.match(r"^[\(（]", t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*:", t, re.I):
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.first_line_indent = Pt(0)
-            p.paragraph_format.line_spacing = body_ls
-            set_para_runs_font(p, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
-        elif not past_abstract and re.match(r"^[\(（]", t) and re.search(r"(China|University|College)", t, re.I):
-            # Ensure Chinese brackets for school info
-            new_t = t
-            if new_t.startswith("("):
-                new_t = "（" + new_t[1:]
-            if new_t.endswith(")"):
-                new_t = new_t[:-1] + "）"
-            if new_t != t:
-                p.text = new_t
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.first_line_indent = Pt(0)
-            p.paragraph_format.line_spacing = body_ls
-            set_para_runs_font(p, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
-        else:
-            if contains_cjk(t):
-                p.alignment = body_align
-                p.paragraph_format.first_line_indent = body_indent
+            set_para_runs_font(p, east_asia=h1_font, size_pt=h1_size, bold=True, latin=latin)
+
+        cn_kw_re = sec.get("cn_keywords_pattern", r"^\s*关键词\s*[：:]")
+        en_abs_re = sec.get("en_abstract_pattern", r"(?i)^\s*Abstract\s*[：:]")
+        en_kw_re = sec.get("en_keywords_pattern", r"(?i)^\s*Key\s*words\s*[：:]")
+
+        past_abstract = False
+        en_title_seen = False
+
+        for p in non_empty[1:]:
+            t = p.text.strip()
+            if t.startswith("关键词"):
+                cn_kw_para = p
+                normalized = normalize_cn_keywords(t) or t
+                content = normalized.split("：", 1)[1] if "：" in normalized else ""
+                p.clear()
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                p.paragraph_format.first_line_indent = Pt(0)
                 p.paragraph_format.line_spacing = body_ls
-                set_para_runs_font(p, east_asia=body_font, size_pt=body_size,
-                                   bold=False, latin=latin)
-            elif t:
+                r1 = p.add_run("关键词：")
+                set_run_font(r1, east_asia=h1_font, size_pt=body_size, bold=True, latin=latin)
+                r2 = p.add_run(content)
+                set_run_font(r2, east_asia=body_font, size_pt=body_size, bold=False, latin=latin)
+            elif re.match(r"^\s*Abstract\s*:", t, flags=re.I):
+                past_abstract = True
+                content = re.sub(r"^\s*Abstract\s*:\s*", "", t, flags=re.I)
+                p.clear()
                 p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 p.paragraph_format.first_line_indent = Pt(0)
                 p.paragraph_format.line_spacing = body_ls
-                set_para_runs_font(p, east_asia=latin, size_pt=body_size,
-                                   bold=False, latin=latin)
+                r1 = p.add_run("Abstract: ")
+                set_run_font(r1, east_asia=latin, size_pt=body_size, bold=True, latin=latin)
+                r2 = p.add_run(content)
+                set_run_font(r2, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
+            elif re.match(r"^\s*Key\s*words\s*:", t, flags=re.I):
+                en_kw_para = p
+                normalized = normalize_en_keywords(t) or t
+                content = re.sub(r"^\s*Key\s*words\s*:\s*", "", normalized, flags=re.I)
+                p.clear()
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                p.paragraph_format.first_line_indent = Pt(0)
+                p.paragraph_format.line_spacing = body_ls
+                r1 = p.add_run("Key words: ")
+                set_run_font(r1, east_asia=latin, size_pt=body_size, bold=True, latin=latin)
+                r2 = p.add_run(content)
+                set_run_font(r2, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
+            elif not past_abstract and not contains_cjk(t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*:", t, re.I) and len(t) > 20 and not re.match(r"^[\(（]", t):
+                en_title_seen = True
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.first_line_indent = Pt(0)
+                p.paragraph_format.line_spacing = body_ls
+                set_para_runs_font(p, east_asia=latin, size_pt=h1_size, bold=True, latin=latin)
+            elif not past_abstract and en_title_seen and not contains_cjk(t) and not re.match(r"^[\(（]", t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*:", t, re.I):
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.first_line_indent = Pt(0)
+                p.paragraph_format.line_spacing = body_ls
+                set_para_runs_font(p, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
+            elif not past_abstract and re.match(r"^[\(（]", t) and re.search(r"(China|University|College)", t, re.I):
+                new_t = t
+                if new_t.startswith("("):
+                    new_t = "（" + new_t[1:]
+                if new_t.endswith(")"):
+                    new_t = new_t[:-1] + "）"
+                if new_t != t:
+                    p.text = new_t
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.first_line_indent = Pt(0)
+                p.paragraph_format.line_spacing = body_ls
+                set_para_runs_font(p, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
+            else:
+                if contains_cjk(t):
+                    if body_align is not None:
+                        p.alignment = body_align
+                    p.paragraph_format.first_line_indent = body_indent
+                    p.paragraph_format.line_spacing = body_ls
+                    set_para_runs_font(p, east_asia=body_font, size_pt=body_size,
+                                       bold=False, latin=latin)
+                elif t:
+                    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                    p.paragraph_format.first_line_indent = Pt(0)
+                    p.paragraph_format.line_spacing = body_ls
+                    set_para_runs_font(p, east_asia=latin, size_pt=body_size,
+                                       bold=False, latin=latin)
 
-    if cn_kw_para is not None:
-        insert_page_break_after(cn_kw_para)
-    if en_kw_para is not None:
-        insert_page_break_after(en_kw_para)
+        if cn_kw_para is not None:
+            insert_page_break_after(cn_kw_para)
+        if en_kw_para is not None:
+            insert_page_break_after(en_kw_para)
+
+    def _apply_heading_para(para, align, hcfg, font, size, bold):
+        if align is not None:
+            para.alignment = align
+        para.paragraph_format.first_line_indent = Pt(0)
+        para.paragraph_format.line_spacing = body_ls
+        sb = hcfg.get("space_before", 0)
+        sa = hcfg.get("space_after", 0)
+        if sb >= 0:
+            para.paragraph_format.space_before = Pt(sb * 12)
+        if sa >= 0:
+            para.paragraph_format.space_after = Pt(sa * 12)
+        set_para_runs_font(para, east_asia=font, size_pt=size, bold=bold, latin=latin)
 
     # Heading-level direct formatting (config-driven special title mapping)
     for para in doc.paragraphs:
@@ -2053,15 +2509,17 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             para.alignment = _ALIGN_MAP.get(entry.get("align", "center"), WD_ALIGN_PARAGRAPH.CENTER)
             para.paragraph_format.first_line_indent = Pt(0)
             para.paragraph_format.line_spacing = body_ls
-            zero_spacing(para)
+            _h1cfg = cfg["headings"]["h1"]
+            _sb = _h1cfg.get("space_before", 0)
+            _sa = _h1cfg.get("space_after", 0)
+            if _sb >= 0:
+                para.paragraph_format.space_before = Pt(_sb * 12)
+            if _sa >= 0:
+                para.paragraph_format.space_after = Pt(_sa * 12)
             set_para_runs_font(para, east_asia=h1_font, size_pt=h1_size,
                                bold=True, latin=latin)
         elif sn == "Heading 1":
-            para.alignment = h1_align
-            para.paragraph_format.first_line_indent = Pt(0)
-            para.paragraph_format.line_spacing = body_ls
-            set_para_runs_font(para, east_asia=h1_font, size_pt=h1_size,
-                               bold=h1_bold, latin=latin)
+            _apply_heading_para(para, h1_align, cfg["headings"]["h1"], h1_font, h1_size, h1_bold)
             if t_nospace in st_map:
                 entry = st_map[t_nospace]
                 para.text = entry["display"]
@@ -2074,27 +2532,20 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                 set_para_runs_font(para, east_asia=h1_font, size_pt=h1_size,
                                    bold=True, latin=latin)
         elif sn == "Heading 2":
-            para.alignment = h2_align
-            para.paragraph_format.first_line_indent = Pt(0)
-            para.paragraph_format.line_spacing = body_ls
-            set_para_runs_font(para, east_asia=h2_font, size_pt=h2_size,
-                               bold=h2_bold, latin=latin)
+            _apply_heading_para(para, h2_align, cfg["headings"]["h2"], h2_font, h2_size, h2_bold)
         elif sn == "Heading 3":
-            para.alignment = h3_align
-            para.paragraph_format.first_line_indent = Pt(0)
-            para.paragraph_format.line_spacing = body_ls
-            set_para_runs_font(para, east_asia=h3_font, size_pt=h3_size,
-                               bold=h3_bold, latin=latin)
+            _apply_heading_para(para, h3_align, cfg["headings"]["h3"], h3_font, h3_size, h3_bold)
         elif sn == "Heading 4":
-            para.alignment = h4_align
-            para.paragraph_format.first_line_indent = Pt(0)
-            para.paragraph_format.line_spacing = body_ls
-            set_para_runs_font(para, east_asia=h4_font, size_pt=h4_size,
-                               bold=h4_bold, latin=latin)
+            _apply_heading_para(para, h4_align, cfg["headings"]["h4"], h4_font, h4_size, h4_bold)
         elif sn == "样式1":
             para.paragraph_format.first_line_indent = Pt(0)
             para.paragraph_format.line_spacing = body_ls
-            zero_spacing(para)
+            sb = cfg["headings"]["h1"].get("space_before", 0)
+            sa = cfg["headings"]["h1"].get("space_after", 0)
+            if sb >= 0:
+                para.paragraph_format.space_before = Pt(sb * 12)
+            if sa >= 0:
+                para.paragraph_format.space_after = Pt(sa * 12)
             if t_nospace in st_map:
                 entry = st_map[t_nospace]
                 para.text = entry["display"]
@@ -2236,6 +2687,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
 
     # Table formatting
     tbl_cfg = cfg["table"]
+    tbl_cell_align = _ALIGN_MAP.get(tbl_cfg.get("cell_align", "center"))
     for table in doc.tables:
         # Autofit: table width = 100% of page
         tbl = table._tbl
@@ -2259,7 +2711,8 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         for r_idx, row in enumerate(table.rows):
             for cell in row.cells:
                 for p in cell.paragraphs:
-                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    if tbl_cell_align is not None:
+                        p.alignment = tbl_cell_align
                     p.paragraph_format.space_before = Pt(0)
                     p.paragraph_format.space_after = Pt(0)
                     p.paragraph_format.first_line_indent = Pt(0)
@@ -2297,6 +2750,10 @@ def apply_format(input_path, output_path, config=None, config_path=None):
 
     # Page numbering
     setup_page_numbers(doc, cfg)
+    try:
+        setup_headers(doc, cfg)
+    except Exception as e:
+        print(f"  [警告] 页眉设置出错，已跳过: {e}", file=sys.stderr)
 
     # Cover page
     custom_cover = cfg.get("cover", {}).get("custom_docx", "")

@@ -12,6 +12,32 @@ import argparse
 import re
 
 
+def read_file_with_encoding(input_path):
+    """尝试多种编码读取文件，解决不同系统txt编码不一致问题"""
+    encodings = ["utf-8", "utf-8-sig", "gbk", "gb2312", "gb18030"]
+    for enc in encodings:
+        try:
+            with open(input_path, "r", encoding=enc) as f:
+                lines = f.readlines()
+            print(f"[编码检测] 使用 {enc} 读取成功")
+            return lines
+        except UnicodeDecodeError:
+            continue
+    # 如果都失败，抛出更友好的错误
+    raise ValueError(
+        f"无法识别文件编码。请确保txt文件是 UTF-8 或 GBK 编码。\n"
+        f"你可以用记事本打开文件，'另存为'时选择UTF-8编码。"
+    )
+
+
+_SENTENCE_ENDINGS = set("。！？；")
+
+
+def _is_title_line(text):
+    """True if text looks like a short heading, not a sentence/paragraph."""
+    return len(text) <= 50 and text[-1] not in _SENTENCE_ENDINGS
+
+
 def detect_heading_level(line):
     """Return (level, line_text) or None if not a heading."""
     stripped = line.strip()
@@ -20,6 +46,14 @@ def detect_heading_level(line):
 
     # H1: 第X章
     if re.match(r"^第\s*\d+\s*章\b", stripped):
+        return (1, stripped)
+
+    # H1: Chapter X (英文)
+    if re.match(r"(?i)^Chapter\s+\d+", stripped):
+        return (1, stripped)
+
+    # H1: 中文序号 "一、", "二、" etc.
+    if re.match(r"^[一二三四五六七八九十百]+、", stripped):
         return (1, stripped)
 
     # H1 special sections
@@ -33,17 +67,38 @@ def detect_heading_level(line):
     if re.match(r"^附录\s*[A-Z]", stripped):
         return (1, stripped)
 
-    # H4: X.X.X.X
-    if re.match(r"^\d+\.\d+\.\d+\.\d+\s", stripped):
-        return (4, stripped)
+    # H1: pure number like "1 绪论", "2 文献综述"
+    if re.match(r"^\d+\s+\S", stripped) and not re.match(r"^\d+\.\d+", stripped):
+        return (1, stripped)
 
-    # H3: X.X.X
-    if re.match(r"^\d+\.\d+\.\d+\s", stripped):
+    # H4: X.X.X.X (space or CJK after number, must be short title line)
+    if re.match(r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))", stripped):
+        if _is_title_line(stripped):
+            return (4, stripped)
+
+    # H3: X.X.X (space or CJK after number, must be short title line)
+    if re.match(r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))", stripped):
+        if _is_title_line(stripped):
+            return (3, stripped)
+
+    # H2: （一）, （二） etc. (中文序号)
+    if re.match(r"^（[一二三四五六七八九十百]+）", stripped):
+        return (2, stripped)
+
+    # H2: X.X (space or CJK after number, must be short title line)
+    if re.match(r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))", stripped):
+        if _is_title_line(stripped):
+            return (2, stripped)
+
+    # H3: "1. xxx" (中文序号 preset H3, short title only)
+    m = re.match(r"^(\d+)\.\s+(\S.*)", stripped)
+    if m and _is_title_line(stripped):
         return (3, stripped)
 
-    # H2: X.X
-    if re.match(r"^\d+\.\d+\s", stripped):
-        return (2, stripped)
+    # H4: (1) (2) etc. (中文序号 preset H4, short title only)
+    m = re.match(r"^\(\d+\)\s*(\S.*)", stripped)
+    if m and _is_title_line(stripped):
+        return (4, stripped)
 
     return None
 
@@ -138,8 +193,8 @@ def fix_quotes(text):
 
 
 def preprocess(input_path, output_path):
-    with open(input_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    # 使用多编码尝试读取文件
+    lines = read_file_with_encoding(input_path)
     # Fix double quotes: ASCII + mismatched Chinese → proper left/right pairs
     lines = [fix_quotes(line) for line in lines]
 
