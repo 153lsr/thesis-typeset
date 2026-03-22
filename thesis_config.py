@@ -95,12 +95,23 @@ DEFAULT_CONFIG = {
         "align": "justify",
     },
     "captions": {
+        "mode": "dynamic",
         "figure_pattern": r"^图\s*\d",
         "table_pattern": r"^(续)?表\s*\d",
         "subfigure_pattern": r"^\([a-z]\)",
         "note_pattern": r"^注[：:]",
         "keep_with_next": True,
         "check_numbering": True,
+        "use_seq_fields": True,
+        "line_spacing": 1.5,
+        "font": "宋体",
+        "number_font": "Times New Roman",
+        "size": 10.5,
+        "include_chapter": True,
+        "chapter_heading_level": 1,
+        "chapter_separator": ".",
+        "caption_separator": "",
+        "restart_per_chapter": True,
     },
     "references": {
         "first_line_indent": -24,
@@ -137,6 +148,7 @@ DEFAULT_CONFIG = {
     },
     "toc": {
         "depth": 3,
+        "enabled": True,
         "font": "宋体",
         "font_size": 12,
         "line_spacing": 1.5,
@@ -294,3 +306,4 @@ def dump_default_config():
         raise RuntimeError("需要 pyyaml。请运行: pip install pyyaml")
     return yaml.dump(DEFAULT_CONFIG, allow_unicode=True, default_flow_style=False,
                      sort_keys=False)
+

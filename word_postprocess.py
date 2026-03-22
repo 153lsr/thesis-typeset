@@ -6,10 +6,13 @@ Handles:
 """
 
 import argparse
+import ctypes
 import os
 import re
+import subprocess
 import sys
 import threading
+from ctypes import wintypes
 
 import pythoncom
 import win32com.client as win32
@@ -20,13 +23,46 @@ wdLineSpace1pt5 = 1
 msoAutomationSecurityForceDisable = 3
 
 
+class PostprocessError(RuntimeError):
+    """Raised when Word COM post-processing fails."""
+
+
+class PostprocessTimeoutError(PostprocessError):
+    """Raised when Word COM post-processing exceeds the timeout."""
+
+
+def _get_process_id_from_hwnd(hwnd):
+    """Return the process id that owns *hwnd*, or None if unavailable."""
+    if not hwnd:
+        return None
+    pid = wintypes.DWORD()
+    thread_id = ctypes.windll.user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    if not thread_id or not pid.value:
+        return None
+    return int(pid.value)
+
+
+def _terminate_process(pid, timeout=5):
+    """Force-kill a specific process id without touching unrelated Word instances."""
+    if not pid:
+        return False
+    try:
+        result = subprocess.run(
+            ["taskkill", "/F", "/PID", str(int(pid))],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
 def postprocess(docx_path, timeout=90, config=None):
     docx_path = os.path.abspath(docx_path)
     if not os.path.exists(docx_path):
-        print(f"File not found: {docx_path}", file=sys.stderr)
-        sys.exit(1)
+        raise PostprocessError(f"File not found: {docx_path}")
 
-    # Extract font settings from config (or use defaults)
     if config:
         toc_cfg = config.get("toc", {})
         fonts_cfg = config.get("fonts", {})
@@ -43,7 +79,7 @@ def postprocess(docx_path, timeout=90, config=None):
         toc_h1_ea = toc_ea
         toc_h1_size = toc_size
 
-    result = {"ok": False, "error": None}
+    result = {"ok": False, "error": None, "pid": None}
     done_event = threading.Event()
 
     def worker():
@@ -55,6 +91,10 @@ def postprocess(docx_path, timeout=90, config=None):
             word.DisplayAlerts = wdAlertsNone
             word.AutomationSecurity = msoAutomationSecurityForceDisable
             word.Options.DoNotPromptForConvert = True
+            try:
+                result["pid"] = _get_process_id_from_hwnd(word.Hwnd)
+            except Exception:
+                result["pid"] = None
 
             print("[1/3] Opening document...", flush=True)
             doc = word.Documents.Open(
@@ -79,10 +119,10 @@ def postprocess(docx_path, timeout=90, config=None):
                     except Exception:
                         sname = ""
                     level = 0
-                    m = re.search(r'(\d+)\s*$', str(sname))
+                    m = re.search(r"(\d+)\s*$", str(sname))
                     if m:
                         level = int(m.group(1))
-                    is_level1 = (level == 1)
+                    is_level1 = level == 1
                     p.Range.Font.Name = toc_latin
                     p.Range.Font.NameFarEast = toc_h1_ea if is_level1 else toc_ea
                     p.Range.Font.Size = toc_h1_size if is_level1 else toc_size
@@ -97,8 +137,8 @@ def postprocess(docx_path, timeout=90, config=None):
             doc.Close()
             result["ok"] = True
 
-        except Exception as e:
-            result["error"] = str(e)
+        except Exception as exc:
+            result["error"] = str(exc)
         finally:
             if word:
                 try:
@@ -113,15 +153,20 @@ def postprocess(docx_path, timeout=90, config=None):
     finished = done_event.wait(timeout=timeout)
 
     if not finished:
-        print(f"TIMEOUT after {timeout}s — killing Word", file=sys.stderr)
-        os.system("taskkill /F /IM WINWORD.EXE >nul 2>&1")
-        sys.exit(2)
+        pid = result.get("pid")
+        if _terminate_process(pid):
+            raise PostprocessTimeoutError(
+                f"TIMEOUT after {timeout}s; terminated Word PID {pid}"
+            )
+        raise PostprocessTimeoutError(
+            f"TIMEOUT after {timeout}s; spawned Word PID unavailable, no external Word processes were terminated"
+        )
 
     if result["ok"]:
         print(f"OK {docx_path}")
-    else:
-        print(f"ERROR: {result['error']}", file=sys.stderr)
-        sys.exit(1)
+        return docx_path
+
+    raise PostprocessError(result["error"] or "Unknown Word COM post-processing error")
 
 
 def main():
@@ -129,7 +174,15 @@ def main():
     parser.add_argument("--input", required=True, help="Input docx path")
     parser.add_argument("--timeout", type=int, default=90, help="Timeout in seconds")
     args = parser.parse_args()
-    postprocess(args.input, timeout=args.timeout)
+
+    try:
+        postprocess(args.input, timeout=args.timeout)
+    except PostprocessTimeoutError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+    except PostprocessError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

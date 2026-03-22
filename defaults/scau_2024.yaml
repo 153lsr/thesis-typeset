@@ -34,19 +34,22 @@ fonts:
   h3: "楷体"                         # 三级标题
   h4: "楷体"                         # 四级标题
 
-# ---- 字号 (pt) ----
+# ---- 字号 (支持多单位) ----
+# 单位格式：数值(默认pt) / 数字+pt / 数字+cm / 数字+mm / 数字+in / 中文字号
+# 示例: 12 / 12pt / 0.42cm / 4.23mm / 0.17in / 小四
 sizes:
-  body: 12                           # 小四
-  h1: 14                             # 四号
+  body: 12                           # 小四 (12pt)
+  h1: 14                             # 四号 (14pt)
   h2: 12                             # 小四
   h3: 12                             # 小四
   h4: 12                             # 小四
-  caption: 10.5                      # 五号 (图题/表题)
-  note: 9                            # 小五 (表注)
-  footnote: 9                        # 小五 (脚注)
-  page_number: 10.5                  # 五号 (页码)
+  caption: 10.5                      # 五号 (10.5pt)
+  note: 9                            # 小五 (9pt)
+  footnote: 9                        # 小五
+  page_number: 10.5                  # 五号
 
 # ---- 标题格式 ----
+# space_before/space_after 支持多单位（pt/cm/mm/in/中文字号）
 headings:
   h1:
     bold: true
@@ -62,9 +65,10 @@ headings:
     align: left
 
 # ---- 正文格式 ----
+# first_line_indent 支持多单位（pt/cm/mm/in/中文字号）
 body:
   align: justify                     # 两端对齐
-  first_line_indent: 24              # 首行缩进 (pt)，24pt = 2个中文字符
+  first_line_indent: 24              # 首行缩进 (24pt = 2个中文字符)
   line_spacing: 1.5                  # 行距倍数
 
 # ---- 表格 ----
@@ -80,13 +84,21 @@ footnote:
 
 # ---- 图表题 ----
 captions:
+  mode: "dynamic"                         # 题注模式: stable / dynamic（默认推荐）
   figure_pattern: '^图\s*\d'             # 图题正则
   table_pattern: '^(续)?表\s*\d'         # 表题正则
-  subfigure_pattern: '^\([a-z]\)'        # 分图题正则
+  subfigure_pattern: '^\([a-z]\)'        # 分图题正则（可删除）
   note_pattern: '^注[：:]'               # 表注正则
   keep_with_next: true                   # 图表题防分页
   check_numbering: true                  # 检查图表编号连续性
-
+  line_spacing: 1.5                      # 题注/表注行距倍数
+  # dynamic 仅适用于真正 Heading 样式 + Word 多级列表编号的规范文档；
+  # 预检不通过时会自动回退 stable，并给出明确 warning。
+  include_chapter: true                  # 是否显示章节号（如 图2.1）
+  chapter_heading_level: 1               # 章节编号引用的标题级别（1=章，2=节）
+  chapter_separator: '.'                 # 章节号与图表序号之间的分隔符（可通过GUI修改）
+  caption_separator: ''                  # 编号与标题文字之间的附加分隔符
+  restart_per_chapter: true              # 是否在每章内重新从 1 编号
 # ---- 参考文献 ----
 references:
   first_line_indent: -24             # 悬挂缩进首行 (pt)
@@ -102,6 +114,7 @@ page_numbers:
 # ---- 目录 ----
 toc:
   depth: 3                           # 目录显示层级 (1-4)
+  enabled: true                      # 是否生成目录
   font: "宋体"                       # 目录内容字体
   font_size: 12                      # 目录内容字号 (pt)，小四
   line_spacing: 1.5                  # 目录行距
@@ -196,3 +209,5 @@ declarations:
 theme_fonts:
   latin: "Times New Roman"
   hans: "宋体"
+
+

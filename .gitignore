@@ -30,3 +30,8 @@ Thumbs.db
 
 # Internal docs
 FORMATTING_SPEC.md
+
+# Local test artifacts / scratch
+tmp_test_artifacts/
+=1.10.0
+旧/
