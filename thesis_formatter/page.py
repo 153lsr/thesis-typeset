@@ -214,6 +214,32 @@ def _set_even_odd_on_doc(doc):
         settings.append(OxmlElement("w:evenAndOddHeaders"))
 
 
+def _clear_story_content(story):
+    story.is_linked_to_previous = False
+    for p in story.paragraphs:
+        p.clear()
+
+
+def _clear_section_footers(section):
+    for story in (section.footer, section.first_page_footer, section.even_page_footer):
+        _clear_story_content(story)
+
+
+def _finalize_cover_section_page_numbers(doc, cfg, body_section_index=None):
+    cover_sections = int(cfg.get("_runtime", {}).get("custom_cover_sections", 0) or 0)
+    if cover_sections <= 0:
+        return
+    cover_sections = min(cover_sections, len(doc.sections))
+    for idx in range(cover_sections):
+        _clear_section_footers(doc.sections[idx])
+    first_non_cover_idx = cover_sections if cover_sections < len(doc.sections) else None
+    if first_non_cover_idx is None:
+        return
+    if body_section_index is not None and first_non_cover_idx >= body_section_index:
+        return
+    pn = cfg["page_numbers"]
+    set_section_page_number_format(doc.sections[first_non_cover_idx], fmt=pn["front_format"], start=pn["front_start"])
+
 def _setup_single_section_pn(doc, cfg):
     pn = cfg["page_numbers"]
     body_pos = pn.get("body_position", "center")
@@ -271,11 +297,13 @@ def setup_page_numbers(doc, cfg):
     first_body_h1 = find_first_body_heading(doc, cfg)
     if first_body_h1 is None:
         _setup_single_section_pn(doc, cfg)
+        _finalize_cover_section_page_numbers(doc, cfg)
         return
 
     new_sect_pr = insert_section_break_before(first_body_h1)
     if new_sect_pr is None:
         _setup_single_section_pn(doc, cfg)
+        _finalize_cover_section_page_numbers(doc, cfg)
         return
 
     for attr in ["pgSz", "pgMar"]:
@@ -322,3 +350,6 @@ def setup_page_numbers(doc, cfg):
                     p.clear()
                 ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
                 add_page_number_field(ep, cfg, align=actual_pos)
+    _finalize_cover_section_page_numbers(doc, cfg, body_section_index=len(doc.sections) - 1 if len(doc.sections) > 1 else None)
+
+

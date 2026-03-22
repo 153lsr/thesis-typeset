@@ -89,6 +89,16 @@ def _render_header_para(paragraph, text, cfg, hf_cfg, doc, align="center"):
                            hf_cfg.get("border_bottom_style", "single"))
 
 
+def _clear_header_story(story):
+    story.is_linked_to_previous = False
+    for p in story.paragraphs:
+        p.clear()
+
+
+def _clear_section_headers(section):
+    for story in (section.header, section.first_page_header, section.even_page_header):
+        _clear_header_story(story)
+
 def setup_headers(doc, cfg):
     hf = cfg.get("header_footer", {})
     if not hf.get("enabled", False):
@@ -102,10 +112,16 @@ def setup_headers(doc, cfg):
     if diff_oe:
         _set_even_odd_on_doc(doc)
     doc_has_even_odd = doc.settings.element.find(qn("w:evenAndOddHeaders")) is not None
+    cover_sections = max(0, int(cfg.get("_runtime", {}).get("custom_cover_sections", 0) or 0))
+    body_section_index = len(doc.sections) - 1 if len(doc.sections) > 1 else 0
 
     for idx, section in enumerate(doc.sections):
-        is_front = idx == 0 and len(doc.sections) > 1
+        if idx < cover_sections:
+            _clear_section_headers(section)
+            continue
+        is_front = idx < body_section_index
         if scope == "body" and is_front:
+            _clear_section_headers(section)
             continue
 
         if first_no:
@@ -137,3 +153,4 @@ def setup_headers(doc, cfg):
                 p.clear()
             first_footer = section.first_page_footer
             first_footer.is_linked_to_previous = False
+

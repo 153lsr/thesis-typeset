@@ -31,32 +31,78 @@ from .cover import _has_cover, find_existing_cover_end, insert_cover_and_declara
 from .structure import validate_structure
 
 
-def _insert_cover_via_vbs(target_path, cover_path):
-    """使用嵌入的 VBS 代码插入封面，保留完整格式."""
-    import sys
-
-    vbs_code = """Option Explicit
-Dim objWord, targetDoc, args, targetPath, coverPath
+def _build_insert_cover_vbs():
+    return """Option Explicit
+Const wdCollapseEnd = 0
+Const wdSectionBreakNextPage = 2
+Const wdFormatXMLDocument = 12
+Dim objWord, mergedDoc, args, targetPath, coverPath, tempBodyPath, fso
 Set args = WScript.Arguments
 If args.Count < 2 Then WScript.Quit 1
 targetPath = args(0): coverPath = args(1)
+tempBodyPath = targetPath & ".body.tmp.docx"
+Set fso = CreateObject("Scripting.FileSystemObject")
 On Error Resume Next
+If fso.FileExists(tempBodyPath) Then fso.DeleteFile tempBodyPath, True
+fso.CopyFile targetPath, tempBodyPath, True
+If Err.Number <> 0 Then WScript.Quit 1
+Err.Clear
 Set objWord = CreateObject("Word.Application")
 If Err.Number <> 0 Then WScript.Quit 1
 On Error GoTo 0
 objWord.Visible = False: objWord.DisplayAlerts = 0
-Set targetDoc = objWord.Documents.Open(targetPath)
-If Err.Number <> 0 Then objWord.Quit: WScript.Quit 1
+Set mergedDoc = objWord.Documents.Open(coverPath)
+If Err.Number <> 0 Then
+    objWord.Quit
+    WScript.Quit 1
+End If
 On Error GoTo 0
-objWord.Selection.HomeKey 6
-objWord.Selection.InsertFile coverPath
-objWord.Selection.EndKey 6
-objWord.Selection.InsertBreak 7
-targetDoc.Save
-targetDoc.Close False
+mergedDoc.SaveAs2 targetPath, wdFormatXMLDocument
+mergedDoc.Range(mergedDoc.Content.End - 1, mergedDoc.Content.End - 1).Select
+objWord.Selection.InsertBreak wdSectionBreakNextPage
+objWord.Selection.Collapse wdCollapseEnd
+objWord.Selection.InsertFile tempBodyPath
+If mergedDoc.Sections.Count >= 1 Then
+    ClearSectionHeaderFooter mergedDoc.Sections(1)
+End If
+If mergedDoc.Sections.Count >= 2 Then
+    UnlinkSectionHeaderFooter mergedDoc.Sections(2)
+End If
+mergedDoc.Save
+mergedDoc.Close False
+If fso.FileExists(tempBodyPath) Then fso.DeleteFile tempBodyPath, True
 objWord.Quit
 WScript.Echo "Done"
+
+Sub ClearSectionHeaderFooter(section)
+    Dim idx
+    On Error Resume Next
+    For idx = 1 To 3
+        section.Headers(idx).LinkToPrevious = False
+        section.Headers(idx).Range.Text = ""
+        section.Footers(idx).LinkToPrevious = False
+        section.Footers(idx).Range.Text = ""
+    Next
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Sub UnlinkSectionHeaderFooter(section)
+    Dim idx
+    On Error Resume Next
+    For idx = 1 To 3
+        section.Headers(idx).LinkToPrevious = False
+        section.Footers(idx).LinkToPrevious = False
+    Next
+    Err.Clear
+    On Error GoTo 0
+End Sub
 """
+def _insert_cover_via_vbs(target_path, cover_path):
+    """使用嵌入的 VBS 代码插入封面，保留完整格式."""
+    import sys
+
+    vbs_code = _build_insert_cover_vbs()
 
     try:
         import tempfile
@@ -76,7 +122,6 @@ WScript.Echo "Done"
         return result.returncode == 0, result.stderr if result.returncode != 0 else ""
     except Exception as e:
         return False, str(e)
-
 
 def apply_format(input_path, output_path, config=None, config_path=None):
     if config is None:
@@ -719,20 +764,22 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     elif cfg["cover"]["enabled"] and not _has_cover(doc, cfg):
         insert_cover_and_declaration(doc, cfg, config_path)
 
-    setup_page_numbers(doc, cfg)
-    try:
-        setup_headers(doc, cfg)
-    except Exception as e:
-        print(f"  [\u8b66\u544a] \u9875\u7709\u8bbe\u7f6e\u51fa\u9519\uff0c\u5df2\u8df3\u8fc7: {e}", file=sys.stderr)
-
     _restore_preserved_front_paragraphs()
     doc.save(output_path)
     if use_custom_cover:
         success, err = _insert_cover_via_vbs(output_path, custom_cover)
         if success:
+            cfg.setdefault("_runtime", {})["custom_cover_sections"] = 1
             print("自定义封面已插入 (VBS)", file=sys.stderr)
         else:
             print(f"自定义封面插入失败（VBS不可用，已跳过）: {err}", file=sys.stderr)
+    doc = Document(output_path)
+    setup_page_numbers(doc, cfg)
+    try:
+        setup_headers(doc, cfg)
+    except Exception as e:
+        print(f"  [\u8b66\u544a] \u9875\u7709\u8bbe\u7f6e\u51fa\u9519\uff0c\u5df2\u8df3\u8fc7: {e}", file=sys.stderr)
+    doc.save(output_path)
     patch_theme_fonts(output_path, cfg)
     if renum_changes:
         warnings.append("\u6807\u9898\u7f16\u53f7\u5df2\u81ea\u52a8\u4fee\u6b63:")
@@ -792,6 +839,7 @@ def main():
     cfg, cfg_path = resolve_config(cli_config=args.config, input_path=args.input)
     apply_format(args.input, args.output, config=cfg, config_path=cfg_path)
     print(f"OK {args.output}")
+
 
 
 
