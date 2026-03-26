@@ -90,6 +90,13 @@ python thesis_format_cli.py --input 论文.docx --config thesis_config.yaml
 python thesis_format_cli.py --dump-config
 ```
 
+## 单独处理模式
+
+适合只修局部、不想大动正文时使用：
+
+- 单独改页码：只按现有分节调整页码，不自动补分节，尽量少动正文。
+- 单独改页眉：只按现有分节调整页眉，不自动补分节，尽量少动正文。
+- 单独插入/更新目录、单独插入外部封面，仍按原有单独处理逻辑执行。
 ## 输入与依赖说明
 
 | 输入格式 | 说明 | 额外依赖 |
@@ -172,3 +179,4 @@ python -m unittest discover -s tests
 ## 许可证
 
 GPL-3.0
+
