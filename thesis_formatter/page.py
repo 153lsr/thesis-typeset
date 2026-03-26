@@ -6,7 +6,27 @@ from ._titles import _find_special_display
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+
+
 from docx.shared import Cm
+
+
+_AR_CHAPTER_PATTERN = r"^第\s*\d+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
+_CN_CHAPTER_PATTERN = r"^第\s*[一二三四五六七八九十百千零两〇]+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
+
+
+def _iter_chapter_patterns(sec, text_first=False):
+    configured = sec.get("chapter_pattern", _AR_CHAPTER_PATTERN)
+    ordered = [_CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN, configured] if text_first else [configured, _CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN]
+    seen = set()
+    for pat in ordered:
+        if pat and pat not in seen:
+            seen.add(pat)
+            yield pat
+
+
+def _matches_chapter_heading(text, sec, text_first=False):
+    return any(re.match(pat, text) for pat in _iter_chapter_patterns(sec, text_first=text_first))
 
 
 def normalize_sections(doc, cfg):
@@ -87,8 +107,11 @@ def set_section_page_number_format(section, fmt="decimal", start=None):
         pg_num = OxmlElement("w:pgNumType")
         sect_pr.append(pg_num)
     pg_num.set(qn("w:fmt"), fmt)
+    start_key = qn("w:start")
     if start is not None:
-        pg_num.set(qn("w:start"), str(start))
+        pg_num.set(start_key, str(start))
+    elif start_key in pg_num.attrib:
+        del pg_num.attrib[start_key]
 
 
 def _is_page_break_only_paragraph(p_element):
@@ -161,9 +184,12 @@ def _normalize_title(text):
     return text.replace(" ", "").replace("\u3000", "")
 
 
+
+
+
 def find_first_body_heading(doc, cfg):
     sec = cfg.get("sections", {})
-    chapter_re = re.compile(sec.get("chapter_pattern", r"^第\s*\d+\s*章\b"))
+    text_first = bool(cfg.get("toc", {}).get("only_insert", False))
     appendix_re = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
 
     skip_titles = set()
@@ -190,7 +216,7 @@ def find_first_body_heading(doc, cfg):
     for para, text, normalized in headings:
         if normalized in skip_titles or appendix_re.match(text):
             continue
-        if chapter_re.match(text):
+        if _matches_chapter_heading(text, sec, text_first=text_first):
             return para
 
     for para, text, normalized in headings:
@@ -199,6 +225,25 @@ def find_first_body_heading(doc, cfg):
         return para
 
     return None
+
+
+def get_body_start_section_index(doc, cfg, first_body_h1=None):
+    if first_body_h1 is None:
+        first_body_h1 = find_first_body_heading(doc, cfg)
+    if first_body_h1 is None:
+        return len(doc.sections) - 1 if len(doc.sections) > 1 else 0
+
+    target = first_body_h1._element
+    section_idx = 0
+    for child in doc._element.body.iterchildren():
+        if child is target:
+            return min(section_idx, len(doc.sections) - 1)
+        if child.tag != qn("w:p"):
+            continue
+        ppr = child.find(qn("w:pPr"))
+        if ppr is not None and ppr.find(qn("w:sectPr")) is not None:
+            section_idx += 1
+    return len(doc.sections) - 1 if len(doc.sections) > 1 else 0
 
 
 def _enable_even_odd_headers(section):
@@ -311,18 +356,21 @@ def setup_page_numbers(doc, cfg):
         if existing is not None:
             new_sect_pr.append(copy.deepcopy(existing))
 
-    set_section_page_number_format(
-        doc.sections[0], fmt=pn["front_format"], start=pn["front_start"])
+    body_section_index = get_body_start_section_index(doc, cfg, first_body_h1)
 
-    if len(doc.sections) > 1:
-        set_section_page_number_format(
-            doc.sections[-1], fmt=pn["body_format"], start=pn["body_start"])
+    for idx, section in enumerate(doc.sections):
+        if idx < body_section_index:
+            start = pn["front_start"] if idx == 0 else None
+            set_section_page_number_format(section, fmt=pn["front_format"], start=start)
+        else:
+            start = pn["body_start"] if idx == body_section_index else None
+            set_section_page_number_format(section, fmt=pn["body_format"], start=start)
 
     if need_even_odd:
         _set_even_odd_on_doc(doc)
 
     for idx, section in enumerate(doc.sections):
-        is_body = idx == len(doc.sections) - 1 and len(doc.sections) > 1
+        is_body = len(doc.sections) > 1 and idx >= body_section_index
         pos = body_pos if is_body else front_pos
 
         footer = section.footer
@@ -350,6 +398,6 @@ def setup_page_numbers(doc, cfg):
                     p.clear()
                 ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
                 add_page_number_field(ep, cfg, align=actual_pos)
-    _finalize_cover_section_page_numbers(doc, cfg, body_section_index=len(doc.sections) - 1 if len(doc.sections) > 1 else None)
+    _finalize_cover_section_page_numbers(doc, cfg, body_section_index=body_section_index if len(doc.sections) > 1 else None)
 
 

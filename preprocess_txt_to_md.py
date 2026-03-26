@@ -45,7 +45,7 @@ def detect_heading_level(line):
         return None
 
     # H1: 第X章
-    if re.match(r"^第\s*\d+\s*章\b", stripped):
+    if re.match(r"^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\b", stripped):
         return (1, stripped)
 
     # H1: Chapter X (英文)

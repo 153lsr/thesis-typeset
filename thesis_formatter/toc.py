@@ -1,5 +1,6 @@
 from ._titles import _find_special_display
 from ._common import get_paragraph_heading_level, parse_length, line_spacing_to_ooxml, paragraph_spacing_to_ooxml
+from .page import find_first_body_heading
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -10,6 +11,20 @@ def _set_snap_to_grid(ppr, enabled):
         snap = OxmlElement("w:snapToGrid")
         ppr.insert(0, snap)
     snap.set(qn("w:val"), "1" if enabled else "0")
+
+
+def _set_toc_level_indent(ppr, level):
+    ind = ppr.find(qn("w:ind"))
+    if ind is None:
+        ind = OxmlElement("w:ind")
+        ppr.append(ind)
+    for attr in ("w:left", "w:leftChars", "w:right", "w:rightChars", "w:firstLine", "w:firstLineChars", "w:hanging", "w:hangingChars"):
+        key = qn(attr)
+        if key in ind.attrib:
+            del ind.attrib[key]
+    ind.set(qn("w:firstLineChars"), "0")
+    if level > 1:
+        ind.set(qn("w:leftChars"), str((level - 1) * 100))
 
 
 def _apply_spacing_value(spacing, side, value):
@@ -42,6 +57,25 @@ def _ensure_spacing(ppr, line_twips=None, line_rule=None, before_value=None, aft
     return spacing
 
 
+def _set_on_off_property(rpr, tag_name, enabled):
+    el = rpr.find(qn(f"w:{tag_name}"))
+    if el is None:
+        el = OxmlElement(f"w:{tag_name}")
+        rpr.append(el)
+    el.set(qn("w:val"), "1" if enabled else "0")
+
+
+def _is_toc_sdt(sdt, ns):
+    gallery = sdt.find(".//w:docPartGallery", ns)
+    if gallery is not None and gallery.get(qn("w:val")) == "Table of Contents":
+        return True
+
+    for instr in sdt.findall(".//w:instrText", ns):
+        if "TOC" in (instr.text or ""):
+            return True
+    return False
+
+
 def insert_toc(doc, cfg):
     toc_match = _find_special_display(cfg, "\u76ee\u5f55", raw=True)
     toc_depth = cfg["toc"]["depth"]
@@ -50,6 +84,7 @@ def insert_toc(doc, cfg):
     toc_cfg = cfg["toc"]
     toc_font = toc_cfg.get("font", cfg["fonts"]["body"])
     toc_font_size = toc_cfg.get("font_size", cfg["sizes"]["body"])
+    toc_bold = toc_cfg.get("bold", False)
     toc_sz_hp = str(int(toc_font_size * 2))
     toc_ls = toc_cfg.get("line_spacing", cfg["body"]["line_spacing"])
     toc_ls_twips, toc_ls_rule = line_spacing_to_ooxml(toc_ls)
@@ -58,14 +93,21 @@ def insert_toc(doc, cfg):
     latin = cfg["fonts"]["latin"]
 
     first_h1_el = None
-    for para in doc.paragraphs:
-        if get_paragraph_heading_level(para) == 1:
-            t = para.text.strip().replace(" ", "").replace("\u3000", "")
-            if t == toc_match:
-                para._element.getparent().remove(para._element)
-                continue
-            first_h1_el = para._element
-            break
+    for para in list(doc.paragraphs):
+        if get_paragraph_heading_level(para) != 1:
+            continue
+        t = para.text.strip().replace(" ", "").replace("\u3000", "")
+        if t == toc_match:
+            para._element.getparent().remove(para._element)
+
+    first_body_heading = find_first_body_heading(doc, cfg)
+    if first_body_heading is not None:
+        first_h1_el = first_body_heading._element
+    else:
+        for para in doc.paragraphs:
+            if get_paragraph_heading_level(para) == 1:
+                first_h1_el = para._element
+                break
 
     if first_h1_el is None:
         return
@@ -74,7 +116,8 @@ def insert_toc(doc, cfg):
 
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     for sdt in list(body.findall("w:sdt", ns)):
-        body.remove(sdt)
+        if _is_toc_sdt(sdt, ns):
+            body.remove(sdt)
 
     toc_display = _find_special_display(cfg, "\u76ee\u5f55")
     toc_title = OxmlElement("w:p")
@@ -138,7 +181,7 @@ def insert_toc(doc, cfg):
     run_instr.append(instr_rpr)
     instr_text = OxmlElement("w:instrText")
     instr_text.set(qn("xml:space"), "preserve")
-    instr_text.text = f' TOC \\o "1-{toc_depth}" \\h \\z \\u '
+    instr_text.text = f' TOC \\o "1-{toc_depth}" \\h \\z '
     run_instr.append(instr_text)
     toc_field.append(run_instr)
 
@@ -186,9 +229,11 @@ def ensure_toc_styles(doc, cfg):
     toc_cfg = cfg["toc"]
     toc_font = toc_cfg.get("font", cfg["fonts"]["body"])
     toc_font_size = toc_cfg.get("font_size", cfg["sizes"]["body"])
+    toc_bold = toc_cfg.get("bold", False)
     toc_sz_hp = str(int(toc_font_size * 2))
     toc_h1_font = toc_cfg.get("h1_font", cfg["fonts"]["h1"])
     toc_h1_font_size = toc_cfg.get("h1_font_size", cfg["sizes"]["h1"])
+    toc_h1_bold = toc_cfg.get("h1_bold", False)
     toc_h1_sz_hp = str(int(toc_h1_font_size * 2))
     toc_ls_twips, toc_ls_rule = line_spacing_to_ooxml(toc_cfg.get("line_spacing", cfg["body"]["line_spacing"]))
     latin = cfg["fonts"]["latin"]
@@ -201,7 +246,7 @@ def ensure_toc_styles(doc, cfg):
         style_id = f"TOC{i}"
         ea = toc_h1_font if i == 1 else toc_font
         sz_hp = toc_h1_sz_hp if i == 1 else toc_sz_hp
-        level_font_size = toc_h1_font_size if i == 1 else toc_font_size
+        level_bold = toc_h1_bold if i == 1 else toc_bold
         toc_sb_value = toc_cfg.get("space_before", 0)
         toc_sa_value = toc_cfg.get("space_after", 0)
         found = styles_el.find(f'.//w:style[@w:styleId="{style_id}"]', ns)
@@ -230,12 +275,15 @@ def ensure_toc_styles(doc, cfg):
                 szCs = OxmlElement("w:szCs")
                 rpr.append(szCs)
             szCs.set(qn("w:val"), sz_hp)
+            _set_on_off_property(rpr, "b", level_bold)
+            _set_on_off_property(rpr, "bCs", level_bold)
             ppr = found.find("w:pPr", ns)
             if ppr is None:
                 ppr = OxmlElement("w:pPr")
                 found.append(ppr)
             _set_snap_to_grid(ppr, False)
             _ensure_spacing(ppr, line_twips=toc_ls_twips, line_rule=toc_ls_rule, before_value=toc_sb_value, after_value=toc_sa_value)
+            _set_toc_level_indent(ppr, i)
             continue
 
         style_el = OxmlElement("w:style")
@@ -273,6 +321,8 @@ def ensure_toc_styles(doc, cfg):
         szCs = OxmlElement("w:szCs")
         szCs.set(qn("w:val"), sz_hp)
         rpr.append(szCs)
+        _set_on_off_property(rpr, "b", level_bold)
+        _set_on_off_property(rpr, "bCs", level_bold)
         color = OxmlElement("w:color")
         color.set(qn("w:val"), "000000")
         rpr.append(color)
@@ -281,12 +331,9 @@ def ensure_toc_styles(doc, cfg):
         ppr = OxmlElement("w:pPr")
         _set_snap_to_grid(ppr, False)
         _ensure_spacing(ppr, line_twips=toc_ls_twips, line_rule=toc_ls_rule, before_value=toc_sb_value, after_value=toc_sa_value)
-        ind = OxmlElement("w:ind")
-        ind.set(qn("w:firstLine"), "0")
-        if i > 1:
-            ind.set(qn("w:left"), str((i - 1) * 240))
-        ppr.append(ind)
+        _set_toc_level_indent(ppr, i)
         style_el.append(ppr)
 
         styles_el.append(style_el)
+
 

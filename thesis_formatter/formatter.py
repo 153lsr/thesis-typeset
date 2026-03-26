@@ -1,6 +1,7 @@
 import copy
 import os
 import re
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -22,7 +23,7 @@ from ._common import (
     _ALL_HEADING_NAMES, parse_length, apply_line_spacing, apply_paragraph_spacing,
 )
 from ._titles import _find_special_display, _get_special_title_map, _detect_front_matter
-from .headings import auto_assign_heading_styles, renumber_headings, normalize_heading_spacing
+from .headings import auto_assign_heading_styles, renumber_headings, normalize_heading_spacing, demote_abstract_heading_styles
 from .references import check_citations, apply_ref_crosslinks
 from .page import normalize_sections, setup_page_numbers, insert_page_break_after, find_first_body_heading
 from .headers import setup_headers
@@ -164,8 +165,70 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     sec = cfg["sections"]
     ref_key = "\u53c2\u8003\u6587\u732e"
     toc_key = "\u76ee\u5f55"
+    toc_cfg = cfg.get("toc", {})
+    toc_enabled = toc_cfg.get("enabled", True)
+    toc_only = toc_cfg.get("only_insert", False)
+    cover_cfg = cfg.get("cover", {})
+    cover_only = cover_cfg.get("only_insert", False)
+    custom_cover = cover_cfg.get("custom_docx", "")
+    use_custom_cover = bool(custom_cover and os.path.isfile(custom_cover))
+
+    if cover_only:
+        if not use_custom_cover:
+            raise RuntimeError("仅插入外部封面模式需要提供有效的自定义封面 .docx")
+        shutil.copy2(input_path, output_path)
+        success, err = _insert_cover_via_vbs(output_path, custom_cover)
+        if not success:
+            raise RuntimeError(f"自定义封面插入失败: {err}")
+        cfg.setdefault("_runtime", {})["custom_cover_sections"] = 1
+        cfg["_runtime"]["cover_only"] = True
+        return []
 
     doc = Document(input_path)
+
+    def _configure_toc_styles():
+        if "TOC Heading" in doc.styles:
+            st = doc.styles["TOC Heading"]
+            toc_h_font = cfg["toc"].get("h1_font", h1_font)
+            toc_h_size = parse_length(cfg["toc"].get("h1_font_size", cfg["sizes"]["h1"]))
+            set_style_font(st, east_asia=toc_h_font, size_pt=toc_h_size, bold=True, latin=latin)
+            st.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _toc_h_sb = cfg["toc"].get("space_before", 0)
+            _toc_h_sa = cfg["toc"].get("space_after", 0)
+            apply_paragraph_spacing(st.paragraph_format, "before", _toc_h_sb)
+            apply_paragraph_spacing(st.paragraph_format, "after", _toc_h_sa)
+        ensure_toc_styles(doc, cfg)
+
+
+    if toc_only:
+        if toc_enabled:
+            auto_changes = auto_assign_heading_styles(doc, cfg, preserve_look=True)
+            if auto_changes:
+                print(f"自动识别标题（仅用于目录，保留原外观）({len(auto_changes)} 个):", file=sys.stderr)
+                for item in auto_changes:
+                    print(item, file=sys.stderr)
+            abstract_demotions = demote_abstract_heading_styles(
+                doc,
+                cfg,
+                include_abstract=toc_cfg.get("exclude_abstract_headings", True),
+                aggressive_body_demote=True,
+            )
+            if abstract_demotions:
+                print(f"以下段落已从 Heading 样式解除，不参与目录 ({len(abstract_demotions)} 个):", file=sys.stderr)
+                for item in abstract_demotions:
+                    print(item, file=sys.stderr)
+            if sec.get("renumber_headings", False):
+                renum_changes = renumber_headings(doc, cfg)
+                if renum_changes:
+                    print(f"已顺便校正标题编号顺序 ({len(renum_changes)} 个):", file=sys.stderr)
+                    for item in renum_changes:
+                        print(item, file=sys.stderr)
+            normalize_heading_spacing(doc, cfg)
+        if toc_enabled:
+            _configure_toc_styles()
+            insert_toc(doc, cfg)
+        doc.save(output_path)
+        return []
 
     fm_mode = cfg.get("front_matter", {}).get("mode", "auto")
 
@@ -285,23 +348,14 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         _set_heading_style(3, h3_font, h3_size, h3_bold, h3_align, cfg["headings"]["h3"])
         _set_heading_style(4, h4_font, h4_size, h4_bold, h4_align, cfg["headings"]["h4"])
 
-    if "TOC Heading" in doc.styles:
-        st = doc.styles["TOC Heading"]
-        toc_h_font = cfg["toc"].get("h1_font", h1_font)
-        toc_h_size = parse_length(cfg["toc"].get("h1_font_size", cfg["sizes"]["h1"]))
-        set_style_font(st, east_asia=toc_h_font, size_pt=toc_h_size, bold=True, latin=latin)
-        st.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _toc_h_sb = cfg["toc"].get("space_before", 0)
-        _toc_h_sa = cfg["toc"].get("space_after", 0)
-        apply_paragraph_spacing(st.paragraph_format, "before", _toc_h_sb)
-        apply_paragraph_spacing(st.paragraph_format, "after", _toc_h_sa)
-
-    ensure_toc_styles(doc, cfg)
+    _configure_toc_styles()
 
     toc_content_font = cfg["toc"].get("font", body_font)
     toc_content_size = parse_length(cfg["toc"].get("font_size", cfg["sizes"]["body"]))
+    toc_content_bold = cfg["toc"].get("bold", False)
     toc_h1_font = cfg["toc"].get("h1_font", cfg["fonts"]["h1"])
     toc_h1_size = parse_length(cfg["toc"].get("h1_font_size", cfg["sizes"]["h1"]))
+    toc_h1_bold = cfg["toc"].get("h1_bold", False)
     toc_content_ls = cfg["toc"].get("line_spacing", body_ls)
     toc_sb = cfg["toc"].get("space_before", 0)
     toc_sa = cfg["toc"].get("space_after", 0)
@@ -318,8 +372,9 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             apply_paragraph_spacing(para.paragraph_format, "after", toc_sa)
             ea = toc_h1_font if is_toc1 else toc_content_font
             sz = toc_h1_size if is_toc1 else toc_content_size
+            bold = toc_h1_bold if is_toc1 else toc_content_bold
             set_para_runs_font(para, east_asia=ea, size_pt=sz,
-                               bold=False, latin=latin)
+                               bold=bold, latin=latin)
 
     for name in ["Footnote Text", "Footnote Reference"]:
         if name in doc.styles:
@@ -373,36 +428,55 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     en_kw_para = None
 
     if has_fm:
-        first_h1_idx = None
-        for i, para in enumerate(doc.paragraphs):
-            if is_heading(para, 1):
-                first_h1_idx = i
-                break
-        if first_h1_idx is None:
+        first_body_h1 = find_first_body_heading(doc, cfg)
+        if first_body_h1 is None:
             first_h1_idx = len(doc.paragraphs)
+        else:
+            first_h1_idx = next(
+                (i for i, para in enumerate(doc.paragraphs) if para._p is first_body_h1._p),
+                len(doc.paragraphs),
+            )
 
         front = doc.paragraphs[cover_end_idx:first_h1_idx]
         non_empty = [p for p in front if p.text.strip()]
 
-        if non_empty:
-            abstract_display = _find_special_display(cfg, "\u6458\u8981")
-            p = non_empty[0]
-            p.text = abstract_display
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.first_line_indent = parse_length(0)
-            apply_line_spacing(p.paragraph_format, body_ls)
-            set_para_runs_font(p, east_asia=h1_font, size_pt=h1_size, bold=True, latin=latin)
-
         cn_kw_re = sec.get("cn_keywords_pattern", r"^\s*\u5173\u952e\u8bcd\s*[\uff1a:]")
         en_abs_re = sec.get("en_abstract_pattern", r"(?i)^\s*Abstract\s*[\uff1a:]")
         en_kw_re = sec.get("en_keywords_pattern", r"(?i)^\s*Key\s*words\s*[\uff1a:]")
+        abstract_display = _find_special_display(cfg, "\u6458\u8981")
+        abstract_display_key = abstract_display.replace(" ", "").replace("\u3000", "")
+        front_has_cjk = any(contains_cjk(p.text.strip()) for p in non_empty)
+        front_has_english = any(
+            bool(re.search(r"[A-Za-z]", p.text.strip())) and not contains_cjk(p.text.strip())
+            for p in non_empty
+        )
+        has_explicit_cn_abstract = any(
+            p.text.strip().replace(" ", "").replace("　", "") in {"摘要", abstract_display_key}
+            for p in non_empty
+        )
+        has_explicit_en_abstract = any(
+            re.match(en_abs_re, p.text.strip()) or re.match(r"(?i)^\s*Abstract\s*$", p.text.strip())
+            for p in non_empty
+        )
+        if non_empty and front_has_cjk and not has_explicit_cn_abstract:
+            warnings.append("前置页缺少明确的摘要/Abstract标题，已保留原文，未强行补写。")
 
         past_abstract = False
         en_title_seen = False
+        normal_style = doc.styles["Normal"] if "Normal" in doc.styles else None
 
-        for p in non_empty[1:]:
+        for idx, p in enumerate(non_empty):
             t = p.text.strip()
-            if t.startswith("\u5173\u952e\u8bcd"):
+            t_nospace = t.replace(" ", "").replace("\u3000", "")
+            if idx == 0 and t_nospace in {"\u6458\u8981", abstract_display_key}:
+                if normal_style is not None:
+                    p.style = normal_style
+                p.text = abstract_display
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.first_line_indent = parse_length(0)
+                apply_line_spacing(p.paragraph_format, body_ls)
+                set_para_runs_font(p, east_asia=h1_font, size_pt=h1_size, bold=True, latin=latin)
+            elif re.match(cn_kw_re, t):
                 cn_kw_para = p
                 normalized = normalize_cn_keywords(t) or t
                 content = normalized.split("\uff1a", 1)[1] if "\uff1a" in normalized else ""
@@ -414,9 +488,20 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                 set_run_font(r1, east_asia=h1_font, size_pt=body_size, bold=True, latin=latin)
                 r2 = p.add_run(content)
                 set_run_font(r2, east_asia=body_font, size_pt=body_size, bold=False, latin=latin)
-            elif re.match(r"^\s*Abstract\s*:", t, flags=re.I):
+            elif re.match(r"(?i)^\s*Abstract\s*$", t):
                 past_abstract = True
-                content = re.sub(r"^\s*Abstract\s*:\s*", "", t, flags=re.I)
+                if normal_style is not None:
+                    p.style = normal_style
+                p.text = "Abstract"
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.first_line_indent = parse_length(0)
+                apply_line_spacing(p.paragraph_format, body_ls)
+                set_para_runs_font(p, east_asia=latin, size_pt=h1_size, bold=True, latin=latin)
+            elif re.match(en_abs_re, t):
+                past_abstract = True
+                if normal_style is not None:
+                    p.style = normal_style
+                content = re.sub(r"^\s*Abstract\s*[\uff1a:]\s*", "", t, flags=re.I)
                 p.clear()
                 p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 p.paragraph_format.first_line_indent = parse_length(0)
@@ -425,10 +510,10 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                 set_run_font(r1, east_asia=latin, size_pt=body_size, bold=True, latin=latin)
                 r2 = p.add_run(content)
                 set_run_font(r2, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
-            elif re.match(r"^\s*Key\s*words\s*:", t, flags=re.I):
+            elif re.match(en_kw_re, t):
                 en_kw_para = p
                 normalized = normalize_en_keywords(t) or t
-                content = re.sub(r"^\s*Key\s*words\s*:\s*", "", normalized, flags=re.I)
+                content = re.sub(r"^\s*Key\s*words\s*[\uff1a:]\s*", "", normalized, flags=re.I)
                 p.clear()
                 p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 p.paragraph_format.first_line_indent = parse_length(0)
@@ -437,18 +522,18 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                 set_run_font(r1, east_asia=latin, size_pt=body_size, bold=True, latin=latin)
                 r2 = p.add_run(content)
                 set_run_font(r2, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
-            elif not past_abstract and not contains_cjk(t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*:", t, re.I) and len(t) > 20 and not re.match(r"^[\(\uff08]", t):
+            elif has_explicit_en_abstract and not past_abstract and not contains_cjk(t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*[\uff1a:]", t, re.I) and len(t) > 20 and not re.match(r"^[\(\uff08]", t):
                 en_title_seen = True
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 p.paragraph_format.first_line_indent = parse_length(0)
                 apply_line_spacing(p.paragraph_format, body_ls)
                 set_para_runs_font(p, east_asia=latin, size_pt=h1_size, bold=True, latin=latin)
-            elif not past_abstract and en_title_seen and not contains_cjk(t) and not re.match(r"^[\(\uff08]", t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*:", t, re.I):
+            elif has_explicit_en_abstract and not past_abstract and en_title_seen and not contains_cjk(t) and not re.match(r"^[\(\uff08]", t) and not re.match(r"^\s*(Abstract|Key\s*words)\s*[\uff1a:]", t, re.I):
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 p.paragraph_format.first_line_indent = parse_length(0)
                 apply_line_spacing(p.paragraph_format, body_ls)
                 set_para_runs_font(p, east_asia=latin, size_pt=body_size, bold=False, latin=latin)
-            elif not past_abstract and re.match(r"^[\(\uff08]", t) and re.search(r"(China|University|College)", t, re.I):
+            elif has_explicit_en_abstract and not past_abstract and re.match(r"^[\(\uff08]", t) and re.search(r"(China|University|College)", t, re.I):
                 new_t = t
                 if new_t.startswith("("):
                     new_t = "\uff08" + new_t[1:]
@@ -475,11 +560,13 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                     set_para_runs_font(p, east_asia=latin, size_pt=body_size,
                                        bold=False, latin=latin)
 
+        if front_has_english and not has_explicit_en_abstract:
+            warnings.append("\u524d\u7f6e\u9875\u7f3a\u5c11\u660e\u786e\u7684\u82f1\u6587Abstract\u6807\u9898\uff0c\u5df2\u4fdd\u7559\u539f\u6587\uff0c\u672a\u5f3a\u884c\u8865\u5199\u3002")
+
         if cn_kw_para is not None:
             insert_page_break_after(cn_kw_para)
         if en_kw_para is not None:
             insert_page_break_after(en_kw_para)
-
     def _apply_heading_para(para, align, hcfg, font, size, bold):
         if align is not None:
             para.alignment = align
@@ -739,7 +826,13 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                     set_table_border(cell, "bottom", sz=tbl_cfg["header_border_sz"])
                 if r_idx == rows - 1:
                     set_table_border(cell, "bottom", sz=tbl_cfg["bottom_border_sz"])
-    if cfg.get("toc", {}).get("enabled", True):
+    if toc_enabled:
+        abstract_demotions = demote_abstract_heading_styles(doc, cfg, include_abstract=toc_cfg.get("exclude_abstract_headings", True))
+        if abstract_demotions:
+            print(f"以下段落已从 Heading 样式解除，不参与目录 ({len(abstract_demotions)} 个):", file=sys.stderr)
+            for item in abstract_demotions:
+                print(item, file=sys.stderr)
+    if toc_enabled:
         insert_toc(doc, cfg)
     toc_match = _find_special_display(cfg, "\u76ee\u5f55", raw=True)
     first_body_h1 = find_first_body_heading(doc, cfg)
@@ -765,6 +858,8 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         insert_cover_and_declaration(doc, cfg, config_path)
 
     _restore_preserved_front_paragraphs()
+    if toc_enabled:
+        demote_abstract_heading_styles(doc, cfg, include_abstract=toc_cfg.get("exclude_abstract_headings", True))
     doc.save(output_path)
     if use_custom_cover:
         success, err = _insert_cover_via_vbs(output_path, custom_cover)

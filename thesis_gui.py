@@ -53,7 +53,7 @@ class FormatterGUI:
         ("文本/Markdown", "*.txt *.md"),
         ("LaTeX", "*.tex"),
     ]
-    CATEGORIES = ["页面", "封面声明", "正文", "标题", "页眉页码", "目录参考", "图表"]
+    CATEGORIES = ["页面", "封面声明", "正文", "标题", "页眉页码", "目录参考", "图表", "单独设置"]
     PANEL_META = {
         "页面": ("页面与前置页", "设置页边距、装订线、页眉页脚距离，以及封面和摘要等前置页处理方式。"),
         "正文": ("正文样式", "调整正文字体、字号、缩进、段落与脚注，让正文版式更稳定。"),
@@ -61,6 +61,7 @@ class FormatterGUI:
         "页眉页码": ("页眉与页码", "配置页眉内容、奇偶页策略、页码格式和位置。"),
         "目录参考": ("目录与参考文献", "管理目录条目、参考文献缩进，以及特殊标题映射。"),
         "图表": ("图表与题注", "控制题注字体、识别规则和三线表参数。"),
+        "单独设置": ("单独处理", "集中放置只做局部操作的功能，例如单独插入目录或只插入外部封面。"),
         "封面声明": ("封面与声明", "设置学校信息、自定义封面、封面字段和声明页内容。"),
     }
     PT_SIZES = ["9pt", "10.5pt", "12pt", "14pt", "16pt", "18pt", "22pt", "24pt", "26pt", "36pt"]
@@ -255,6 +256,7 @@ class FormatterGUI:
             ("页眉页码", self._build_header_pn),
             ("目录参考", self._build_toc_ref),
             ("图表", self._build_caption),
+            ("单独设置", self._build_standalone),
         ]:
             wrapper = self._ttk.Frame(self._content, style="Panel.TFrame")
             canvas = tk.Canvas(wrapper, highlightthickness=0, borderwidth=0, bg=THEME["bg_card"])
@@ -572,6 +574,7 @@ class FormatterGUI:
         self._v_cap_numfont = tk.StringVar(value=cap.get("number_font", "Times New Roman"))
         # cover
         self._v_cov_en = tk.BooleanVar(value=c["cover"]["enabled"])
+        self._v_cover_only = tk.BooleanVar(value=c["cover"].get("only_insert", False))
         self._v_school = tk.StringVar(value=c["meta"]["school_name"])
         self._v_logo = tk.StringVar(value=c["cover"]["logo"])
         self._v_covtitle = tk.StringVar(value=c["cover"]["title_text"])
@@ -582,11 +585,15 @@ class FormatterGUI:
         self._v_tocd = tk.IntVar(value=c["toc"]["depth"])
         self._v_tocfont = tk.StringVar(value=c["toc"].get("font", c["fonts"]["body"]))
         self._v_tocsz = tk.StringVar(value=str(c["toc"].get("font_size", c["sizes"]["body"])) + "pt")
+        self._v_toc_bold = tk.BooleanVar(value=c["toc"].get("bold", False))
+        self._v_toc_only = tk.BooleanVar(value=c["toc"].get("only_insert", False))
+        self._v_toc_ex_abs = tk.BooleanVar(value=c["toc"].get("exclude_abstract_headings", False))
         toc_ls_mode, toc_ls_value = self._split_line_spacing_for_gui(c["toc"].get("line_spacing", c["body"]["line_spacing"]))
         self._v_tocls_mode = tk.StringVar(value=toc_ls_mode)
         self._v_tocls = tk.StringVar(value=toc_ls_value)
         self._v_toc_h1font = tk.StringVar(value=c["toc"].get("h1_font", c["fonts"]["h1"]))
         self._v_toc_h1sz = tk.StringVar(value=str(c["toc"].get("h1_font_size", c["sizes"]["h1"])) + "pt")
+        self._v_toc_h1bold = tk.BooleanVar(value=c["toc"].get("h1_bold", False))
         self._v_toc_sb = tk.StringVar(value=format_paragraph_spacing_value(c["toc"].get("space_before", 0)))
         self._v_toc_sa = tk.StringVar(value=format_paragraph_spacing_value(c["toc"].get("space_after", 0)))
         self._v_refind = tk.DoubleVar(value=c["references"]["left_indent"])
@@ -964,8 +971,8 @@ class FormatterGUI:
                            width=w, state="readonly").grid(row=r, column=1, sticky="w", padx=8, pady=6, ipady=4)
         return r + 1
 
-    def _row_check(self, p, r, lbl, var):
-        self._ttk.Checkbutton(p, text=lbl, variable=var).grid(
+    def _row_check(self, p, r, lbl, var, command=None):
+        self._ttk.Checkbutton(p, text=lbl, variable=var, command=command).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=6)
         return r + 1
 
@@ -1104,6 +1111,30 @@ class FormatterGUI:
             self._v_pat_h3.set(preset["h3"])
             self._v_pat_h4.set(preset["h4"])
 
+    def _build_standalone(self, p):
+        r = 0
+        self._ttk.Label(p, text="单独处理", font=("Microsoft YaHei UI", 11, "bold"),
+                       foreground=THEME["primary"]).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(8, 6))
+        r += 1
+        r = self._row_check(p, r, "单独插入/更新目录（不改其他格式）", self._v_toc_only, command=self._on_toc_only_toggle)
+        r = self._row_check(p, r, "单独插入外部封面（不改正文与其他格式）", self._v_cover_only, command=self._on_cover_only_toggle)
+        self._ttk.Label(
+            p,
+            text="使用“单独插入外部封面”时，要先在“封面声明”里选好自定义封面 .docx。",
+            foreground=THEME["text_secondary"],
+            font=("Microsoft YaHei UI", 8),
+            justify="left",
+        ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        r += 1
+        self._ttk.Label(
+            p,
+            text="“单独插入/更新目录”和“单独插入外部封面”会互斥，勾选其一时会自动取消另一个。",
+            foreground=THEME["text_secondary"],
+            font=("Microsoft YaHei UI", 8),
+            justify="left",
+        ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
+
     def _build_caption(self, p):
         r = 0
         r = self._row_unit_entry(p, r, "图表题字号:", self._v_scap, default_unit="pt", lo=5, hi=36)
@@ -1209,11 +1240,30 @@ class FormatterGUI:
             row=r, column=0, columnspan=3, sticky="w", pady=(8, 6))
         r += 1
         r = self._row_spin(p, r, "目录深度:", self._v_tocd, lo=1, hi=4, step=1, unit="级")
-        r = self._row_entry(p, r, "二级条目字体:", self._v_tocfont)
-        r = self._row_unit_entry(p, r, "二级条目字号:", self._v_tocsz, default_unit="pt", lo=5, hi=36)
         r = self._row_entry(p, r, "一级条目字体:", self._v_toc_h1font)
         r = self._row_unit_entry(p, r, "一级条目字号:", self._v_toc_h1sz, default_unit="pt", lo=5, hi=72)
+        r = self._row_check(p, r, "一级条目加粗", self._v_toc_h1bold)
+        r = self._row_entry(p, r, "二级条目字体:", self._v_tocfont)
+        r = self._row_unit_entry(p, r, "二级条目字号:", self._v_tocsz, default_unit="pt", lo=5, hi=36)
+        r = self._row_check(p, r, "二级条目加粗", self._v_toc_bold)
+        self._ttk.Label(
+            p,
+            text="说明：当前“二级条目”设置会同时作用于目录二级及以下条目。",
+            font=("Microsoft YaHei UI", 8),
+            foreground=THEME["text_secondary"],
+            justify="left",
+        ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        r += 1
         r = self._row_line_spacing(p, r, "目录行距:", self._v_tocls_mode, self._v_tocls, hint="可直接选单倍/1.5倍/2倍；多倍如 1.2；固定值/最小值如 20pt")
+        r = self._row_check(p, r, "摘要/Abstract 不参与目录", self._v_toc_ex_abs)
+        self._ttk.Label(
+            p,
+            text="勾选后会解除摘要/Abstract 的 Heading 样式，并尽量保留原有外观。",
+            font=("Microsoft YaHei UI", 8),
+            foreground=THEME["text_secondary"],
+            justify="left",
+        ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        r += 1
         r = self._row_spin(p, r, "条目段前:", self._v_toc_sb, lo=0, hi=5, step=0.5, unit="行")
         r = self._row_spin(p, r, "条目段后:", self._v_toc_sa, lo=0, hi=5, step=0.5, unit="行")
         r = self._sep(p, r)
@@ -1321,7 +1371,9 @@ class FormatterGUI:
         action_frame.grid_columnconfigure(0, weight=1)
         self._ttk.Label(action_frame, text="运行状态", style="Meta.TLabel").grid(row=0, column=0, sticky="w")
         self._ttk.Label(action_frame, textvariable=self._status_var, style="Value.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 10))
-        self._ttk.Checkbutton(action_frame, text="跳过目录生成", variable=self._v_skip).grid(row=2, column=0, sticky="w", pady=(0, 10))
+        toggles = self._ttk.Frame(action_frame, style="Card.TFrame")
+        toggles.grid(row=2, column=0, sticky="w", pady=(0, 10))
+        self._ttk.Checkbutton(toggles, text="跳过目录生成", variable=self._v_skip, command=self._on_skip_toggle).pack(side="left")
         self._btn = self._create_button(action_frame, text="开始格式化", command=self._start, width=14, bootstyle="primary")
         self._btn.grid(row=3, column=0, sticky="ew")
         self._progress_frame = self._ttk.Frame(action_frame, style="Card.TFrame")
@@ -1394,10 +1446,12 @@ class FormatterGUI:
             self._set_active_scroll_canvas(canvas)
 
     def _on_cat_select(self, _event=None):
-        sel = self._cat_list.curselection()
+        cat_list = getattr(self, "_cat_list", None)
+        if not cat_list:
+            return
+        sel = cat_list.curselection()
         if sel:
-            self._show_panel(self.CATEGORIES[sel[0]])
-
+            self._on_cat_click(self.CATEGORIES[sel[0]])
     # ---- config ↔ vars ----
 
     @staticmethod
@@ -1636,6 +1690,7 @@ class FormatterGUI:
         }
         # cover
         cfg["cover"]["enabled"] = self._v_cov_en.get()
+        cfg["cover"]["only_insert"] = self._v_cover_only.get()
         cfg["meta"]["school_name"] = self._v_school.get()
         cfg["cover"]["logo"] = self._v_logo.get()
         cfg["cover"]["title_text"] = self._v_covtitle.get()
@@ -1660,10 +1715,14 @@ class FormatterGUI:
         # advanced
         cfg["toc"]["depth"] = self._v_tocd.get()
         cfg["toc"]["enabled"] = not self._v_skip.get()
+        cfg["toc"]["only_insert"] = bool(self._v_toc_only.get() and not self._v_skip.get())
+        cfg["toc"]["exclude_abstract_headings"] = self._v_toc_ex_abs.get()
         cfg["toc"]["font"] = self._v_tocfont.get()
         cfg["toc"]["font_size"] = self._numval(self._parse_unit_to_pt(self._v_tocsz.get()))
+        cfg["toc"]["bold"] = self._v_toc_bold.get()
         cfg["toc"]["h1_font"] = self._v_toc_h1font.get()
         cfg["toc"]["h1_font_size"] = self._numval(self._parse_unit_to_pt(self._v_toc_h1sz.get()))
+        cfg["toc"]["h1_bold"] = self._v_toc_h1bold.get()
         cfg["toc"]["line_spacing"] = self._collect_line_spacing_config(self._v_tocls_mode.get(), self._v_tocls.get())
         cfg["toc"]["space_before"] = self._parse_spacing_to_config(self._v_toc_sb.get())
         cfg["toc"]["space_after"] = self._parse_spacing_to_config(self._v_toc_sa.get())
@@ -1798,6 +1857,7 @@ class FormatterGUI:
         self._v_school.set(cfg["meta"]["school_name"])
         self._v_logo.set(cfg["cover"]["logo"])
         self._v_covtitle.set(cfg["cover"]["title_text"])
+        self._v_custom_cover.set(cfg["cover"].get("custom_docx", ""))
         # cover fields
         while self._cov_field_rows:
             self._del_cov_field()
@@ -1815,15 +1875,24 @@ class FormatterGUI:
         # advanced
         self._v_tocd.set(cfg["toc"]["depth"])
         self._v_skip.set(not cfg["toc"].get("enabled", True))
+        self._v_toc_only.set(cfg["toc"].get("only_insert", False))
+        self._v_toc_ex_abs.set(cfg["toc"].get("exclude_abstract_headings", False))
+        self._v_cover_only.set(cfg["cover"].get("only_insert", False))
         self._v_tocfont.set(cfg["toc"].get("font", cfg["fonts"]["body"]))
         self._v_tocsz.set(str(self._numval(cfg["toc"].get("font_size", cfg["sizes"]["body"]))) + "pt")
+        self._v_toc_bold.set(cfg["toc"].get("bold", False))
         self._v_toc_h1font.set(cfg["toc"].get("h1_font", cfg["fonts"]["h1"]))
         self._v_toc_h1sz.set(str(self._numval(cfg["toc"].get("h1_font_size", cfg["sizes"]["h1"]))) + "pt")
+        self._v_toc_h1bold.set(cfg["toc"].get("h1_bold", False))
         toc_ls_mode, toc_ls_value = self._split_line_spacing_for_gui(cfg["toc"].get("line_spacing", cfg["body"]["line_spacing"]))
         self._v_tocls_mode.set(toc_ls_mode)
         self._v_tocls.set(toc_ls_value)
         self._v_toc_sb.set(format_paragraph_spacing_value(cfg["toc"].get("space_before", 0)))
         self._v_toc_sa.set(format_paragraph_spacing_value(cfg["toc"].get("space_after", 0)))
+        if self._v_skip.get() and self._v_toc_only.get():
+            self._v_toc_only.set(False)
+        if self._v_cover_only.get() and self._v_toc_only.get():
+            self._v_toc_only.set(False)
         self._v_refind.set(cfg["references"]["left_indent"])
         self._v_tbl_top.set(cfg["table"]["top_border_sz"] / 8)
         self._v_tbl_hdr.set(cfg["table"]["header_border_sz"] / 8)
@@ -1962,6 +2031,19 @@ class FormatterGUI:
         if self._running:
             self._root.after(100, self._poll)
 
+    def _on_skip_toggle(self):
+        if self._v_skip.get() and self._v_toc_only.get():
+            self._v_toc_only.set(False)
+
+    def _on_toc_only_toggle(self):
+        if self._v_toc_only.get():
+            self._v_skip.set(False)
+            self._v_cover_only.set(False)
+
+    def _on_cover_only_toggle(self):
+        if self._v_cover_only.get():
+            self._v_toc_only.set(False)
+
     # ---- run ----
 
     def _start(self):
@@ -1988,9 +2070,21 @@ class FormatterGUI:
         self._root.after(100, self._poll)
 
         skip = self._v_skip.get()
+        toc_only = self._v_toc_only.get() and not skip
+        cover_only = self._v_cover_only.get()
         self._append_log(f"输入文件: {inp}")
         self._append_log(f"输出文件: {out}")
-        self._append_log(f"目录处理: {'跳过生成' if skip else '正常生成'}")
+        if cover_only:
+            mode_status = "单独插入外部封面"
+            self._append_log(f"单独处理: {mode_status}")
+        else:
+            if skip:
+                toc_status = "跳过生成"
+            elif toc_only:
+                toc_status = "仅插入/更新目录（不改其他格式）"
+            else:
+                toc_status = "正常生成"
+            self._append_log(f"目录处理: {toc_status}")
         self._append_log("开始执行格式化。")
         try:
             config = self._collect_config()
@@ -2002,11 +2096,19 @@ class FormatterGUI:
             self._progress.stop()
             self._progress_frame.grid_remove()
             return
+        if cover_only and not config.get("cover", {}).get("custom_docx"):
+            self._messagebox.showerror("错误", "仅插入外部封面前，请先在“封面声明”中选择自定义封面 .docx。")
+            self._btn.config(state="normal")
+            self._running = False
+            self._set_status("参数检查失败")
+            self._progress.stop()
+            self._progress_frame.grid_remove()
+            return
 
         def worker():
             final_status = "格式化失败"
             try:
-                ok = run_format(inp, out, skip, self._append_log, config=config)
+                ok = run_format(inp, out, self._append_log, config=config)
                 final_status = "格式化完成" if ok else "格式化失败"
                 self._append_log(f"\n--- {final_status} ---")
             except Exception as e:
@@ -2029,5 +2131,6 @@ def main(theme="sandstone"):
 
 if __name__ == "__main__":
     main()
+
 
 

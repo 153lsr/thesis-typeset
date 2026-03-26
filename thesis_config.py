@@ -149,11 +149,15 @@ DEFAULT_CONFIG = {
     "toc": {
         "depth": 3,
         "enabled": True,
+        "only_insert": False,
+        "exclude_abstract_headings": True,
         "font": "宋体",
         "font_size": 12,
+        "bold": False,
         "line_spacing": 1.5,
         "h1_font": "黑体",
         "h1_font_size": 14,
+        "h1_bold": False,
         "space_before": 0,
         "space_after": 0,
     },
@@ -180,6 +184,7 @@ DEFAULT_CONFIG = {
     },
     "cover": {
         "enabled": True,
+        "only_insert": False,
         "logo": "scau_logo.png",
         "logo_width_pt": 343.2,
         "logo_height_pt": 96,
@@ -306,4 +311,6 @@ def dump_default_config():
         raise RuntimeError("需要 pyyaml。请运行: pip install pyyaml")
     return yaml.dump(DEFAULT_CONFIG, allow_unicode=True, default_flow_style=False,
                      sort_keys=False)
+
+
 

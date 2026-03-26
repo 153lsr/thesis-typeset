@@ -115,8 +115,14 @@ page_numbers:
 toc:
   depth: 3                           # 目录显示层级 (1-4)
   enabled: true                      # 是否生成目录
+  only_insert: false                 # 仅插入/更新目录，不改正文等其他排版
+  exclude_abstract_headings: true   # 摘要/Abstract 不参与目录；会解除其 Heading 样式并尽量保留原格式
   font: "宋体"                       # 目录内容字体
   font_size: 12                      # 目录内容字号 (pt)，小四
+  bold: false                        # 二级及以下目录条目是否加粗
+  h1_font: "黑体"                    # 一级目录条目字体
+  h1_font_size: 14                   # 一级目录条目字号 (pt)，四号
+  h1_bold: false                     # 一级目录条目是否加粗
   line_spacing: 1.5                  # 目录行距
 
 # ---- 特殊标题映射 ----
@@ -157,6 +163,7 @@ sections:
 # enabled: false 不生成封面
 cover:
   enabled: true
+  only_insert: false                 # 仅插入外部封面，不修改正文与其他排版
   logo: "scau_logo.png"             # Logo 文件名（相对于配置文件目录）
   logo_width_pt: 343.2              # Logo 宽度 (pt)
   logo_height_pt: 96                # Logo 高度 (pt)
@@ -209,5 +216,7 @@ declarations:
 theme_fonts:
   latin: "Times New Roman"
   hans: "宋体"
+
+
 
 

@@ -5,46 +5,39 @@ cd /d "%~dp0"
 echo === Universal Thesis Formatter - Build EXE ===
 echo.
 
-REM Check pyinstaller
-py -m PyInstaller --version >nul 2>&1
-if errorlevel 1 (
-    echo Installing PyInstaller...
-    py -m pip install pyinstaller
+set "PY_CMD="
+if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_CMD=%LocalAppData%\Programs\Python\Python310\python.exe"
+if not defined PY_CMD if exist "%LocalAppData%\Programs\Python\Python311\python.exe" set "PY_CMD=%LocalAppData%\Programs\Python\Python311\python.exe"
+if not defined PY_CMD if exist "%LocalAppData%\Programs\Python\Python312\python.exe" set "PY_CMD=%LocalAppData%\Programs\Python\Python312\python.exe"
+if not defined PY_CMD for %%P in (python.exe py.exe) do (
+    for /f "delims=" %%I in ('where %%P 2^>nul') do (
+        if not defined PY_CMD set "PY_CMD=%%~fI"
+    )
 )
 
-REM Check pyyaml
-py -c "import yaml" >nul 2>&1
+if not defined PY_CMD (
+    echo ERROR: Python not found. Please install Python or add it to PATH.
+    goto :end
+)
+
+echo Using Python: %PY_CMD%
+
+echo Checking PyInstaller...
+"%PY_CMD%" -m PyInstaller --version >nul 2>&1
+if errorlevel 1 (
+    echo Installing PyInstaller...
+    "%PY_CMD%" -m pip install pyinstaller
+)
+
+echo Checking PyYAML...
+"%PY_CMD%" -c "import yaml" >nul 2>&1
 if errorlevel 1 (
     echo Installing PyYAML...
-    py -m pip install pyyaml
+    "%PY_CMD%" -m pip install pyyaml
 )
 
 echo Building exe...
-py -m PyInstaller ^
-    --onefile ^
-    --name thesis-format ^
-    --add-data "defaults;defaults" ^
-    --hidden-import pythoncom ^
-    --hidden-import win32com ^
-    --hidden-import win32com.client ^
-    --hidden-import yaml ^
-    --hidden-import thesis_format_2024 ^
-    --hidden-import thesis_config ^
-    --hidden-import thesis_formatter ^
-    --hidden-import thesis_formatter._common ^
-    --hidden-import thesis_formatter._titles ^
-    --hidden-import thesis_formatter.headings ^
-    --hidden-import thesis_formatter.page ^
-    --hidden-import thesis_formatter.headers ^
-    --hidden-import thesis_formatter.toc ^
-    --hidden-import thesis_formatter.cover ^
-    --hidden-import thesis_formatter.structure ^
-    --hidden-import thesis_formatter.references ^
-    --hidden-import thesis_formatter.numbering ^
-    --hidden-import thesis_formatter.formatter ^
-    --console ^
-    --noconfirm ^
-    thesis_format_cli.py
+"%PY_CMD%" -m PyInstaller --noconfirm thesis-format.spec
 
 echo.
 if exist "dist\thesis-format.exe" (
@@ -61,5 +54,6 @@ if exist "dist\thesis-format.exe" (
     echo BUILD FAILED - check output above.
 )
 
+:end
 endlocal
 pause

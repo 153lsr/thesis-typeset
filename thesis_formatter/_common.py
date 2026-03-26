@@ -443,6 +443,20 @@ def is_heading(para, level=None):
     return is_heading_style(para.style, level)
 
 
+def _get_outline_heading_level_from_ppr(ppr):
+    if ppr is None:
+        return None
+    outline = ppr.find(qn("w:outlineLvl"))
+    if outline is None:
+        return None
+    val = outline.get(qn("w:val"))
+    try:
+        level = int(val) + 1
+    except (TypeError, ValueError):
+        return None
+    return level if 1 <= level <= 4 else None
+
+
 def get_paragraph_heading_level(para):
     """获取段落的标题级别 (1-4)，如果不是标题则返回 None"""
     if not para.style:

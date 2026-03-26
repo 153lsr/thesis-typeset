@@ -32,8 +32,8 @@ def main():
     parser.add_argument("--input", help="Input file (.docx/.doc/.txt/.md/.tex)")
     parser.add_argument("--output", help="Output docx (default: <stem>_formatted.docx)")
     parser.add_argument("--config", help="Path to thesis_config.yaml")
-    parser.add_argument("--no-postprocess", action="store_true",
-                        help="Skip Word COM post-processing")
+    parser.add_argument("--toc-only", action="store_true",
+                        help="Only insert/update TOC, keep existing document formatting")
     parser.add_argument("--dump-config", action="store_true",
                         help="Print default config YAML and exit")
     args = parser.parse_args()
@@ -52,13 +52,17 @@ def main():
         sys.exit(1)
 
     cfg, cfg_path = resolve_config(cli_config=args.config, input_path=input_path)
+    if args.toc_only:
+        cfg.setdefault("toc", {})
+        cfg["toc"]["enabled"] = True
+        cfg["toc"]["only_insert"] = True
 
     stem = os.path.splitext(os.path.basename(input_path))[0]
     input_dir = os.path.dirname(input_path)
     output_path = (os.path.abspath(args.output) if args.output
                    else os.path.join(input_dir, f"{stem}_formatted.docx"))
 
-    ok = run_format(input_path, output_path, args.no_postprocess, print,
+    ok = run_format(input_path, output_path, print,
                     config=cfg, config_path=cfg_path)
     if not ok:
         sys.exit(1)

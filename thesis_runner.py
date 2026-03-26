@@ -51,7 +51,7 @@ def convert_doc_to_docx(doc_path, out_docx):
         pythoncom.CoUninitialize()
 
 
-def run_format(input_path, output_path, skip_postprocess, log,
+def run_format(input_path, output_path, log,
                config=None, config_path=None):
     """Core formatting pipeline. log(str) receives progress messages."""
     ext = os.path.splitext(input_path)[1].lower()
@@ -100,19 +100,25 @@ def run_format(input_path, output_path, skip_postprocess, log,
             log("[1/3] 转换完成。")
 
         label = f"{school} " if school else ""
-        log(f"[2/3] 应用 {label}格式规范...")
+        toc_only = bool(config.get("toc", {}).get("only_insert", False)) if config else False
+        cover_only = bool(config.get("cover", {}).get("only_insert", False)) if config else False
+        if cover_only:
+            log("[2/3] 仅插入外部封面（保留正文与现有排版）...")
+        elif toc_only:
+            log("[2/3] 仅插入/更新目录（保留现有排版）...")
+        else:
+            log(f"[2/3] 应用 {label}格式规范...")
         fmt_warnings = apply_format(tmp_docx, output_path, config=config, config_path=config_path) or []
         log("[2/3] 格式化完成。")
         for warning in fmt_warnings:
             log(warning)
 
         runtime = config.get("_runtime", {}) if config else {}
-        force_postprocess = runtime.get("caption_mode_effective") == "dynamic"
-        if force_postprocess and skip_postprocess:
-            log("[3/3] dynamic 题注模式要求 Word COM 更新域，已忽略跳过后处理。")
-
-        if not skip_postprocess or force_postprocess:
-            if force_postprocess:
+        force_dynamic_fields = runtime.get("caption_mode_effective") == "dynamic"
+        if cover_only or runtime.get("cover_only"):
+            log("[3/3] 已跳过后处理（仅插入外部封面）。")
+        else:
+            if force_dynamic_fields:
                 log("[3/3] Word COM 后处理（更新目录与动态题注域）...")
             else:
                 log("[3/3] Word COM 后处理（更新目录）...")
@@ -122,8 +128,6 @@ def run_format(input_path, output_path, skip_postprocess, log,
             except Exception as exc:
                 log(f"[3/3] 后处理失败（非致命）: {exc}")
                 log("[3/3] 已跳过。可在 Word 中手动更新目录。")
-        else:
-            log("[3/3] 已跳过目录更新。")
 
         log(f"\n输出文件: {output_path}")
         return True
@@ -133,4 +137,3 @@ def run_format(input_path, output_path, skip_postprocess, log,
     finally:
         if os.path.isdir(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
-

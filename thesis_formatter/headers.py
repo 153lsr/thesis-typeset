@@ -1,5 +1,5 @@
 from ._common import _ALIGN_MAP, set_run_font, _HEADING_STYLE_IDS, parse_length
-from .page import _set_even_odd_on_doc
+from .page import _set_even_odd_on_doc, get_body_start_section_index
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -113,7 +113,7 @@ def setup_headers(doc, cfg):
         _set_even_odd_on_doc(doc)
     doc_has_even_odd = doc.settings.element.find(qn("w:evenAndOddHeaders")) is not None
     cover_sections = max(0, int(cfg.get("_runtime", {}).get("custom_cover_sections", 0) or 0))
-    body_section_index = len(doc.sections) - 1 if len(doc.sections) > 1 else 0
+    body_section_index = get_body_start_section_index(doc, cfg) if len(doc.sections) > 1 else 0
 
     for idx, section in enumerate(doc.sections):
         if idx < cover_sections:

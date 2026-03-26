@@ -18,6 +18,24 @@ CAPTION_MODE_STABLE = "stable"
 CAPTION_MODE_DYNAMIC = "dynamic"
 
 
+_AR_CHAPTER_PATTERN = r"^第\s*\d+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
+_CN_CHAPTER_PATTERN = r"^第\s*[一二三四五六七八九十百千零两〇]+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
+
+
+def _iter_chapter_patterns(sec_cfg):
+    configured = sec_cfg.get("chapter_pattern", _AR_CHAPTER_PATTERN)
+    ordered = [configured, _CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN]
+    seen = set()
+    for pat in ordered:
+        if pat and pat not in seen:
+            seen.add(pat)
+            yield pat
+
+
+def _matches_chapter_heading(text, sec_cfg):
+    return any(re.match(pat, text) for pat in _iter_chapter_patterns(sec_cfg))
+
+
 def _make_field_runs(instr, display, rPr_el=None, font=None, size=None, latin_font=None):
     """创建 Word 域代码的 XML 元素.
 
@@ -135,7 +153,7 @@ def precheck_dynamic_caption_mode(doc, cfg):
     cap_cfg = cfg.get("captions", {})
     sec_cfg = cfg.get("sections", {})
 
-    chapter_pat = re.compile(sec_cfg.get("chapter_pattern", r"^第\s*\d+\s*章\b"))
+    chapter_pat = re.compile(sec_cfg.get("chapter_pattern", r"^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\b"))
     appendix_pat = re.compile(sec_cfg.get("appendix_pattern", r"^附录\s*[A-Z]"))
     h2_pat = re.compile(sec_cfg.get("h2_pattern", r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
     h3_pat = re.compile(sec_cfg.get("h3_pattern", r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
@@ -183,7 +201,7 @@ def precheck_dynamic_caption_mode(doc, cfg):
         level = get_paragraph_heading_level(para)
 
         suspected_level = None
-        if chapter_pat.match(text):
+        if _matches_chapter_heading(text, sec_cfg):
             suspected_level = 1
         elif h2_pat.match(text):
             suspected_level = 2
@@ -204,7 +222,7 @@ def precheck_dynamic_caption_mode(doc, cfg):
             continue
 
         manual_pattern = manual_patterns.get(level)
-        if manual_pattern and manual_pattern.match(text):
+        if (level == 1 and _matches_chapter_heading(text, sec_cfg)) or (manual_pattern and manual_pattern.match(text)):
             add_reason(
                 f"标题“{_shorten_text(text)}”虽然是 Heading{level}，但编号仍是手打文本，不是 Word 多级列表"
             )
@@ -376,10 +394,10 @@ def _create_abstract_num(abstract_num_id, cfg):
 
     # 多级列表模板
     levels = [
-        {"lvl": 0, "fmt": "decimal", "txt": "%1 ", "style": "Heading1"},
-        {"lvl": 1, "fmt": "decimal", "txt": "%1.%2 ", "style": "Heading2"},
-        {"lvl": 2, "fmt": "decimal", "txt": "%1.%2.%3 ", "style": "Heading3"},
-        {"lvl": 3, "fmt": "decimal", "txt": "%1.%2.%3.%4 ", "style": "Heading4"},
+        {"lvl": 0, "fmt": "decimal", "txt": "%1  ", "style": "Heading1"},
+        {"lvl": 1, "fmt": "decimal", "txt": "%1.%2  ", "style": "Heading2"},
+        {"lvl": 2, "fmt": "decimal", "txt": "%1.%2.%3  ", "style": "Heading3"},
+        {"lvl": 3, "fmt": "decimal", "txt": "%1.%2.%3.%4  ", "style": "Heading4"},
     ]
 
     for level_info in levels:
@@ -401,9 +419,9 @@ def _create_abstract_num(abstract_num_id, cfg):
         lvl_text.set(qn("w:val"), level_info["txt"])
         lvl.append(lvl_text)
 
-        # 编号后缀：使用一个普通空格；配合 lvlText 中的一个空格，总计两个普通空格
+        # 编号后缀完全交给 lvlText 中的两个普通空格，避免 Word 只显示一个空格
         suff = OxmlElement("w:suff")
-        suff.set(qn("w:val"), "space")
+        suff.set(qn("w:val"), "nothing")
         lvl.append(suff)
 
         # 关联到段落样式
@@ -439,7 +457,7 @@ def _apply_numbering_to_headings(doc, num_id, cfg):
     except:
         st_map = {}
 
-    chap_pat = re.compile(sec.get("chapter_pattern", r"^第\s*\d+\s*章\b"))
+    chap_pat = re.compile(sec.get("chapter_pattern", r"^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\b"))
     appendix_pat = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
     h2_pat = re.compile(sec.get("h2_pattern", r"^\d+\.\d+\s"))
     h3_pat = re.compile(sec.get("h3_pattern", r"^\d+\.\d+\.\d+\s"))
@@ -479,9 +497,9 @@ def _apply_numbering_to_headings(doc, num_id, cfg):
             p_el.insert(0, p_pr)
 
         # 应用多级列表
-        if level == 1 and chap_pat.match(t):
+        if level == 1 and _matches_chapter_heading(t, sec):
             _set_numbering(p_pr, num_id, 0)
-            new_t = re.sub(r'^第\s*\d+\s*章\s*', "", t).strip()
+            new_t = re.sub(r'^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\s*', "", t).strip()
             if new_t != t:
                 changes.append(f"H1: \"{t}\" → \"{new_t}\"")
                 _set_para_text(para, new_t)
@@ -564,7 +582,7 @@ def _auto_apply_heading_styles(doc, cfg):
     3. 使 STYLEREF 域能正常工作
     """
     sec_cfg = cfg.get("sections", {})
-    chapter_pat = re.compile(sec_cfg.get("chapter_pattern", r"^第\s*\d+\s*章\b"))
+    chapter_pat = re.compile(sec_cfg.get("chapter_pattern", r"^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\b"))
     h2_pat = re.compile(sec_cfg.get("h2_pattern", r"^\d+\.\d+\s"))
     h3_pat = re.compile(sec_cfg.get("h3_pattern", r"^\d+\.\d+\.\d+\s"))
 
@@ -578,7 +596,7 @@ def _auto_apply_heading_styles(doc, cfg):
         current_level = get_paragraph_heading_level(para)
 
         # 一级标题（章）
-        if chapter_pat.match(text) and current_level != 1:
+        if _matches_chapter_heading(text, sec_cfg) and current_level != 1:
             para.style = doc.styles["Heading1"]
             changes.append(f'自动应用 Heading1: "{text[:30]}"')
 
