@@ -122,6 +122,8 @@ DEFAULT_CONFIG = {
         "body_format": "decimal",
         "front_start": 1,
         "body_start": 1,
+        "only_insert": False,
+        "only_insert": False,
         "front_position": "center",
         "body_position": "center",
         "body_odd_position": "right",
@@ -133,6 +135,8 @@ DEFAULT_CONFIG = {
     "header_footer": {
         "enabled": False,
         "scope": "body",
+        "only_insert": False,
+        "only_insert": False,
         "odd_page_text": "华南农业大学 硕士学位论文",
         "even_page_text": "{chapter_title}",
         "different_odd_even": True,
@@ -311,6 +315,8 @@ def dump_default_config():
         raise RuntimeError("需要 pyyaml。请运行: pip install pyyaml")
     return yaml.dump(DEFAULT_CONFIG, allow_unicode=True, default_flow_style=False,
                      sort_keys=False)
+
+
 
 
 

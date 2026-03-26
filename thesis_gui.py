@@ -575,6 +575,8 @@ class FormatterGUI:
         # cover
         self._v_cov_en = tk.BooleanVar(value=c["cover"]["enabled"])
         self._v_cover_only = tk.BooleanVar(value=c["cover"].get("only_insert", False))
+        self._v_pn_only = tk.BooleanVar(value=c["page_numbers"].get("only_insert", False))
+        self._v_hf_only = tk.BooleanVar(value=c["header_footer"].get("only_insert", False))
         self._v_school = tk.StringVar(value=c["meta"]["school_name"])
         self._v_logo = tk.StringVar(value=c["cover"]["logo"])
         self._v_covtitle = tk.StringVar(value=c["cover"]["title_text"])
@@ -1127,14 +1129,31 @@ class FormatterGUI:
             justify="left",
         ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
         r += 1
+        r = self._row_check(p, r, "单独改页码", self._v_pn_only, command=self._on_pn_only_toggle)
         self._ttk.Label(
             p,
-            text="“单独插入/更新目录”和“单独插入外部封面”会互斥，勾选其一时会自动取消另一个。",
+            text="只按现有分节调整页码，不自动补分节，尽量少动正文。",
             foreground=THEME["text_secondary"],
             font=("Microsoft YaHei UI", 8),
             justify="left",
         ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
-
+        r += 1
+        r = self._row_check(p, r, "单独改页眉", self._v_hf_only, command=self._on_hf_only_toggle)
+        self._ttk.Label(
+            p,
+            text="只按现有分节调整页眉，不自动补分节，尽量少动正文。",
+            foreground=THEME["text_secondary"],
+            font=("Microsoft YaHei UI", 8),
+            justify="left",
+        ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        r += 1
+        self._ttk.Label(
+            p,
+            text="以上单独处理功能互斥，勾选其一时会自动取消其他选项。",
+            foreground=THEME["text_secondary"],
+            font=("Microsoft YaHei UI", 8),
+            justify="left",
+        ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(0, 6))
     def _build_caption(self, p):
         r = 0
         r = self._row_unit_entry(p, r, "图表题字号:", self._v_scap, default_unit="pt", lo=5, hi=36)
@@ -1691,6 +1710,8 @@ class FormatterGUI:
         # cover
         cfg["cover"]["enabled"] = self._v_cov_en.get()
         cfg["cover"]["only_insert"] = self._v_cover_only.get()
+        cfg["page_numbers"]["only_insert"] = self._v_pn_only.get()
+        cfg["header_footer"]["only_insert"] = self._v_hf_only.get()
         cfg["meta"]["school_name"] = self._v_school.get()
         cfg["cover"]["logo"] = self._v_logo.get()
         cfg["cover"]["title_text"] = self._v_covtitle.get()
@@ -1878,6 +1899,8 @@ class FormatterGUI:
         self._v_toc_only.set(cfg["toc"].get("only_insert", False))
         self._v_toc_ex_abs.set(cfg["toc"].get("exclude_abstract_headings", False))
         self._v_cover_only.set(cfg["cover"].get("only_insert", False))
+        self._v_pn_only.set(cfg["page_numbers"].get("only_insert", False))
+        self._v_hf_only.set(cfg["header_footer"].get("only_insert", False))
         self._v_tocfont.set(cfg["toc"].get("font", cfg["fonts"]["body"]))
         self._v_tocsz.set(str(self._numval(cfg["toc"].get("font_size", cfg["sizes"]["body"]))) + "pt")
         self._v_toc_bold.set(cfg["toc"].get("bold", False))
@@ -1889,10 +1912,7 @@ class FormatterGUI:
         self._v_tocls.set(toc_ls_value)
         self._v_toc_sb.set(format_paragraph_spacing_value(cfg["toc"].get("space_before", 0)))
         self._v_toc_sa.set(format_paragraph_spacing_value(cfg["toc"].get("space_after", 0)))
-        if self._v_skip.get() and self._v_toc_only.get():
-            self._v_toc_only.set(False)
-        if self._v_cover_only.get() and self._v_toc_only.get():
-            self._v_toc_only.set(False)
+        self._normalize_standalone_mode_state()
         self._v_refind.set(cfg["references"]["left_indent"])
         self._v_tbl_top.set(cfg["table"]["top_border_sz"] / 8)
         self._v_tbl_hdr.set(cfg["table"]["header_border_sz"] / 8)
@@ -2031,19 +2051,50 @@ class FormatterGUI:
         if self._running:
             self._root.after(100, self._poll)
 
+    def _clear_standalone_modes(self):
+        self._v_toc_only.set(False)
+        self._v_cover_only.set(False)
+        self._v_pn_only.set(False)
+        self._v_hf_only.set(False)
+
+    def _activate_standalone_mode(self, mode):
+        self._v_skip.set(False)
+        self._v_toc_only.set(mode == "toc")
+        self._v_cover_only.set(mode == "cover")
+        self._v_pn_only.set(mode == "pn")
+        self._v_hf_only.set(mode == "hf")
+
+    def _normalize_standalone_mode_state(self):
+        if self._v_toc_only.get():
+            self._activate_standalone_mode("toc")
+        elif self._v_cover_only.get():
+            self._activate_standalone_mode("cover")
+        elif self._v_pn_only.get():
+            self._activate_standalone_mode("pn")
+        elif self._v_hf_only.get():
+            self._activate_standalone_mode("hf")
+        elif self._v_skip.get():
+            self._clear_standalone_modes()
+
     def _on_skip_toggle(self):
-        if self._v_skip.get() and self._v_toc_only.get():
-            self._v_toc_only.set(False)
+        if self._v_skip.get():
+            self._clear_standalone_modes()
 
     def _on_toc_only_toggle(self):
         if self._v_toc_only.get():
-            self._v_skip.set(False)
-            self._v_cover_only.set(False)
+            self._activate_standalone_mode("toc")
 
     def _on_cover_only_toggle(self):
         if self._v_cover_only.get():
-            self._v_toc_only.set(False)
+            self._activate_standalone_mode("cover")
 
+    def _on_pn_only_toggle(self):
+        if self._v_pn_only.get():
+            self._activate_standalone_mode("pn")
+
+    def _on_hf_only_toggle(self):
+        if self._v_hf_only.get():
+            self._activate_standalone_mode("hf")
     # ---- run ----
 
     def _start(self):
@@ -2072,11 +2123,16 @@ class FormatterGUI:
         skip = self._v_skip.get()
         toc_only = self._v_toc_only.get() and not skip
         cover_only = self._v_cover_only.get()
+        pn_only = self._v_pn_only.get()
+        hf_only = self._v_hf_only.get()
         self._append_log(f"输入文件: {inp}")
         self._append_log(f"输出文件: {out}")
         if cover_only:
-            mode_status = "单独插入外部封面"
-            self._append_log(f"单独处理: {mode_status}")
+            self._append_log("单独处理: 单独插入外部封面")
+        elif pn_only:
+            self._append_log("单独处理: 仅更新页码")
+        elif hf_only:
+            self._append_log("单独处理: 仅更新页眉")
         else:
             if skip:
                 toc_status = "跳过生成"
@@ -2131,6 +2187,7 @@ def main(theme="sandstone"):
 
 if __name__ == "__main__":
     main()
+
 
 
 

@@ -110,6 +110,8 @@ page_numbers:
   body_format: "decimal"             # 正文部分: decimal / lowerRoman
   front_start: 1                     # 前置部分起始页码
   body_start: 1                      # 正文起始页码
+  only_insert: false                # 仅按现有分节调整页码，不自动补分节
+  only_insert: false                # 仅按现有分节调整页码，不自动补分节
 
 # ---- 目录 ----
 toc:
@@ -216,6 +218,8 @@ declarations:
 theme_fonts:
   latin: "Times New Roman"
   hans: "宋体"
+
+
 
 
 
