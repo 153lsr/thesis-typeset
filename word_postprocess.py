@@ -74,10 +74,12 @@ def _apply_word_spacing(fmt, side, value):
         setattr(fmt, space_attr, float(spec["value"]))
 
 
-def postprocess(docx_path, timeout=90, config=None):
+def postprocess(docx_path, timeout=90, config=None, mode="full"):
     docx_path = os.path.abspath(docx_path)
     if not os.path.exists(docx_path):
         raise PostprocessError(f"File not found: {docx_path}")
+    if mode not in {"full", "fields_only"}:
+        raise PostprocessError(f"Unsupported postprocess mode: {mode}")
 
     if config:
         toc_cfg = config.get("toc", {})
@@ -127,53 +129,56 @@ def postprocess(docx_path, timeout=90, config=None):
             )
             print("[1/3] Done.", flush=True)
 
-            print("[2/3] Updating TOC and fields...", flush=True)
-            for toc in doc.TablesOfContents:
-                toc.Update()
-            doc.Fields.Update()
-            print("[2/3] Done.", flush=True)
+            if mode == "full":
+                print("[2/3] Updating TOC and fields...", flush=True)
+                for toc in doc.TablesOfContents:
+                    toc.Update()
+                doc.Fields.Update()
+                print("[2/3] Done.", flush=True)
 
-            print(f"[3/3] Fixing TOC fonts (L1: {toc_h1_ea} {toc_h1_size}pt, L2+: {toc_ea} {toc_size}pt)...", flush=True)
-            seen_toc_styles = set()
-            for toc in doc.TablesOfContents:
-                for p in toc.Range.Paragraphs:
-                    try:
-                        sname = p.Style.NameLocal
-                    except Exception:
-                        sname = ""
-                    level = 0
-                    m = re.search(r"(\d+)\s*$", str(sname))
-                    if m:
-                        level = int(m.group(1))
-                    is_level1 = level == 1
-                    level_font_size = toc_h1_size if is_level1 else toc_size
-                    style_obj = p.Style
-                    style_fmt = style_obj.ParagraphFormat
-                    style_name = str(sname)
-                    p.Range.Font.Name = toc_latin
-                    p.Range.Font.NameFarEast = toc_h1_ea if is_level1 else toc_ea
-                    p.Range.Font.Size = level_font_size
-                    p.Range.Font.Bold = False
-                    p.Range.Font.ColorIndex = wdColorBlack
-                    try:
-                        p.Format.DisableLineHeightGrid = True
-                    except Exception:
-                        pass
-                    try:
-                        style_fmt.DisableLineHeightGrid = True
-                    except Exception:
-                        pass
-                    if style_name not in seen_toc_styles:
-                        _apply_word_spacing(style_fmt, "before", toc_space_before_cfg)
-                        _apply_word_spacing(style_fmt, "after", toc_space_after_cfg)
-                        seen_toc_styles.add(style_name)
-                    # Reuse the resolved TOC style spacing from Word itself instead of recomputing
-                    # multiple spacing from the run font size. This matches the paragraph dialog.
-                    p.Format.LineSpacingRule = style_fmt.LineSpacingRule
-                    p.Format.LineSpacing = style_fmt.LineSpacing
-                    _apply_word_spacing(p.Format, "before", toc_space_before_cfg)
-                    _apply_word_spacing(p.Format, "after", toc_space_after_cfg)
-            print("[3/3] Done.", flush=True)
+                print(f"[3/3] Fixing TOC fonts (L1: {toc_h1_ea} {toc_h1_size}pt, L2+: {toc_ea} {toc_size}pt)...", flush=True)
+                seen_toc_styles = set()
+                for toc in doc.TablesOfContents:
+                    for p in toc.Range.Paragraphs:
+                        try:
+                            sname = p.Style.NameLocal
+                        except Exception:
+                            sname = ""
+                        level = 0
+                        m = re.search(r"(\d+)\s*$", str(sname))
+                        if m:
+                            level = int(m.group(1))
+                        is_level1 = level == 1
+                        level_font_size = toc_h1_size if is_level1 else toc_size
+                        style_obj = p.Style
+                        style_fmt = style_obj.ParagraphFormat
+                        style_name = str(sname)
+                        p.Range.Font.Name = toc_latin
+                        p.Range.Font.NameFarEast = toc_h1_ea if is_level1 else toc_ea
+                        p.Range.Font.Size = level_font_size
+                        p.Range.Font.Bold = False
+                        p.Range.Font.ColorIndex = wdColorBlack
+                        try:
+                            p.Format.DisableLineHeightGrid = True
+                        except Exception:
+                            pass
+                        try:
+                            style_fmt.DisableLineHeightGrid = True
+                        except Exception:
+                            pass
+                        if style_name not in seen_toc_styles:
+                            _apply_word_spacing(style_fmt, "before", toc_space_before_cfg)
+                            _apply_word_spacing(style_fmt, "after", toc_space_after_cfg)
+                            seen_toc_styles.add(style_name)
+                        p.Format.LineSpacingRule = style_fmt.LineSpacingRule
+                        p.Format.LineSpacing = style_fmt.LineSpacing
+                        _apply_word_spacing(p.Format, "before", toc_space_before_cfg)
+                        _apply_word_spacing(p.Format, "after", toc_space_after_cfg)
+                print("[3/3] Done.", flush=True)
+            else:
+                print("[2/2] Updating fields...", flush=True)
+                doc.Fields.Update()
+                print("[2/2] Done.", flush=True)
 
             doc.Save()
             doc.Close()
@@ -210,7 +215,6 @@ def postprocess(docx_path, timeout=90, config=None):
 
     raise PostprocessError(result["error"] or "Unknown Word COM post-processing error")
 
-
 def main():
     parser = argparse.ArgumentParser(description="Word COM post-processing for thesis docx")
     parser.add_argument("--input", required=True, help="Input docx path")
@@ -229,4 +233,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

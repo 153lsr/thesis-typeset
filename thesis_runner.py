@@ -51,6 +51,40 @@ def convert_doc_to_docx(doc_path, out_docx):
         pythoncom.CoUninitialize()
 
 
+def _header_uses_chapter_title_fields(config):
+    header_cfg = config.get("header_footer", {}) if config else {}
+    texts = [
+        header_cfg.get("odd_page_text", ""),
+        header_cfg.get("even_page_text", ""),
+    ]
+    return any("{chapter_title}" in (text or "") for text in texts)
+
+
+def _resolve_postprocess_mode(config):
+    if not config:
+        return "full"
+
+    runtime = config.get("_runtime", {})
+    local_mode = runtime.get("local_mode")
+    if local_mode == "cover":
+        return "none"
+    if local_mode == "toc":
+        return "full"
+    if local_mode == "page_numbers":
+        return "none"
+    if local_mode == "header_footer":
+        return "fields_only" if _header_uses_chapter_title_fields(config) else "none"
+
+    if runtime.get("cover_only") or config.get("cover", {}).get("only_insert", False):
+        return "none"
+    if config.get("toc", {}).get("only_insert", False):
+        return "full"
+    if config.get("page_numbers", {}).get("only_insert", False):
+        return "none"
+    if config.get("header_footer", {}).get("only_insert", False):
+        return "fields_only" if _header_uses_chapter_title_fields(config) else "none"
+    return "full"
+
 def run_format(input_path, output_path, log,
                config=None, config_path=None):
     """Core formatting pipeline. log(str) receives progress messages."""
@@ -102,10 +136,16 @@ def run_format(input_path, output_path, log,
         label = f"{school} " if school else ""
         toc_only = bool(config.get("toc", {}).get("only_insert", False)) if config else False
         cover_only = bool(config.get("cover", {}).get("only_insert", False)) if config else False
+        page_numbers_only = bool(config.get("page_numbers", {}).get("only_insert", False)) if config else False
+        header_only = bool(config.get("header_footer", {}).get("only_insert", False)) if config else False
         if cover_only:
             log("[2/3] 仅插入外部封面（保留正文与现有排版）...")
         elif toc_only:
             log("[2/3] 仅插入/更新目录（保留现有排版）...")
+        elif page_numbers_only:
+            log("[2/3] 仅更新页码（按现有分节，不自动补分节）...")
+        elif header_only:
+            log("[2/3] 仅更新页眉（按现有分节，不自动补分节）...")
         else:
             log(f"[2/3] 应用 {label}格式规范...")
         fmt_warnings = apply_format(tmp_docx, output_path, config=config, config_path=config_path) or []
@@ -115,20 +155,33 @@ def run_format(input_path, output_path, log,
 
         runtime = config.get("_runtime", {}) if config else {}
         force_dynamic_fields = runtime.get("caption_mode_effective") == "dynamic"
-        if cover_only or runtime.get("cover_only"):
-            log("[3/3] 已跳过后处理（仅插入外部封面）。")
+        postprocess_mode = _resolve_postprocess_mode(config)
+        if postprocess_mode == "none":
+            if cover_only or runtime.get("cover_only"):
+                log("[3/3] 已跳过后处理（仅插入外部封面）。")
+            elif page_numbers_only or runtime.get("local_mode") == "page_numbers":
+                log("[3/3] 已跳过后处理（单独改页码不执行 Word 刷新）。")
+            elif header_only or runtime.get("local_mode") == "header_footer":
+                log("[3/3] 已跳过后处理（单独改页眉无需额外刷新）。")
+            else:
+                log("[3/3] 已跳过后处理。")
         else:
-            if force_dynamic_fields:
+            if postprocess_mode == "fields_only":
+                log("[3/3] Word COM 后处理（仅刷新页眉相关域）...")
+            elif force_dynamic_fields:
                 log("[3/3] Word COM 后处理（更新目录与动态题注域）...")
             else:
                 log("[3/3] Word COM 后处理（更新目录）...")
             try:
-                postprocess(output_path, config=config)
+                postprocess(output_path, config=config, mode=postprocess_mode)
                 log("[3/3] 后处理完成。")
             except Exception as exc:
-                log(f"[3/3] 后处理失败（非致命）: {exc}")
-                log("[3/3] 已跳过。可在 Word 中手动更新目录。")
-
+                if postprocess_mode == "fields_only":
+                    log(f"[3/3] 域刷新失败（非致命）: {exc}")
+                    log("[3/3] 已跳过。可在 Word 中手动更新页眉域。")
+                else:
+                    log(f"[3/3] 后处理失败（非致命）: {exc}")
+                    log("[3/3] 已跳过。可在 Word 中手动更新目录。")
         log(f"\n输出文件: {output_path}")
         return True
     except Exception as exc:
@@ -137,3 +190,4 @@ def run_format(input_path, output_path, log,
     finally:
         if os.path.isdir(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
