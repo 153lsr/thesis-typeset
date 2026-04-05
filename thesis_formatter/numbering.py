@@ -446,6 +446,29 @@ def _create_num(num_id, abstract_num_id):
     return num
 
 
+def _strip_manual_heading_prefix(text, level, sec):
+    if level == 1:
+        patterns = [
+            sec.get("chapter_pattern", r"^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\b"),
+            r"^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章(?:\s|(?=[\u4e00-\u9fff])|$)",
+            r"(?i)^Chapter\s+\d+\b(?:\s|(?=[\u4e00-\u9fff])|$)",
+            r"^\d+(?:\s|(?=[\u4e00-\u9fff]))",
+            r"^[一二三四五六七八九十百]+、",
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, text)
+            if match:
+                return text[match.end():].strip()
+        return text
+    if level == 2:
+        return re.sub(r'^\d+\.\d+\s*', "", text).strip()
+    if level == 3:
+        return re.sub(r'^\d+\.\d+\.\d+\s*', "", text).strip()
+    if level == 4:
+        return re.sub(r'^\d+\.\d+\.\d+\.\d+\s*', "", text).strip()
+    return text
+
+
 def _apply_numbering_to_headings(doc, num_id, cfg):
     """应用多级列表到标题段落."""
     sec = cfg.get("sections", {})
@@ -499,27 +522,27 @@ def _apply_numbering_to_headings(doc, num_id, cfg):
         # 应用多级列表
         if level == 1 and _matches_chapter_heading(t, sec):
             _set_numbering(p_pr, num_id, 0)
-            new_t = re.sub(r'^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\s*', "", t).strip()
+            new_t = _strip_manual_heading_prefix(t, 1, sec)
             if new_t != t:
-                changes.append(f"H1: \"{t}\" → \"{new_t}\"")
+                changes.append(f'H1: "{t}" → "{new_t}"')
                 _set_para_text(para, new_t)
         elif level == 2 and h2_pat.match(t):
             _set_numbering(p_pr, num_id, 1)
-            new_t = re.sub(r'^\d+\.\d+\s*', "", t).strip()
+            new_t = _strip_manual_heading_prefix(t, 2, sec)
             if new_t != t:
-                changes.append(f"H2: \"{t}\" → \"{new_t}\"")
+                changes.append(f'H2: "{t}" → "{new_t}"')
                 _set_para_text(para, new_t)
         elif level == 3 and h3_pat.match(t):
             _set_numbering(p_pr, num_id, 2)
-            new_t = re.sub(r'^\d+\.\d+\.\d+\s*', "", t).strip()
+            new_t = _strip_manual_heading_prefix(t, 3, sec)
             if new_t != t:
-                changes.append(f"H3: \"{t}\" → \"{new_t}\"")
+                changes.append(f'H3: "{t}" → "{new_t}"')
                 _set_para_text(para, new_t)
         elif level == 4 and h4_pat.match(t):
             _set_numbering(p_pr, num_id, 3)
-            new_t = re.sub(r'^\d+\.\d+\.\d+\.\d+\s*', "", t).strip()
+            new_t = _strip_manual_heading_prefix(t, 4, sec)
             if new_t != t:
-                changes.append(f"H4: \"{t}\" → \"{new_t}\"")
+                changes.append(f'H4: "{t}" → "{new_t}"')
                 _set_para_text(para, new_t)
 
     return changes
@@ -972,4 +995,5 @@ def _create_caption_rpr(source_rpr, east_asia_font, size_pt, latin_font):
     sz_cs.set(qn("w:val"), str(int(size_pt * 2)))
 
     return r_pr
+
 

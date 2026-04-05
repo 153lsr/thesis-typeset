@@ -1,3 +1,4 @@
+import re
 import sys
 import tempfile
 import tkinter
@@ -85,6 +86,22 @@ class FormatterGUINavigationTests(unittest.TestCase):
         self.assertTrue(self.gui._v_pn_only.get())
         self.assertFalse(self.gui._v_hf_only.get())
 
+    def test_heading_preset_labels_follow_scau_pure_number_rule(self):
+        import thesis_gui
+
+        self.assertIn("X / X.X / X.X.X (纯数字, SCAU)", thesis_gui.FormatterGUI.HEADING_PRESETS)
+        self.assertIn("第X章 / X.X / X.X.X", thesis_gui.FormatterGUI.HEADING_PRESETS)
+        self.assertNotIn("第X章 / X.X / X.X.X (SCAU)", thesis_gui.FormatterGUI.HEADING_PRESETS)
+
+        pure = thesis_gui.FormatterGUI.HEADING_PRESETS["X / X.X / X.X.X (纯数字, SCAU)"]
+
+        self.assertRegex("1 绪论", pure["h1"])
+        self.assertRegex("1绪论", pure["h1"])
+        self.assertRegex("1.1 研究背景", pure["h2"])
+        self.assertRegex("1.1研究背景", pure["h2"])
+        self.assertRegex("1.1.1技术路线", pure["h3"])
+        self.assertRegex("1.1.1.1实现细节", pure["h4"])
+
     def test_start_logs_header_only_mode(self):
         with tempfile.NamedTemporaryFile(suffix=".docx") as tmp:
             self.gui._v_in.set(tmp.name)
@@ -117,3 +134,4 @@ class FormatterGUINavigationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -103,21 +103,21 @@ class FormatterGUI:
     _LINE_SPACING_MODE_R = {"exact": "固定值", "at_least": "最小值", "multiple": "多倍行距"}
     LINE_SPACING_MODE_LABELS = list(_LINE_SPACING_MODE.keys())
     HEADING_PRESETS = {
-        "第X章 / X.X / X.X.X (SCAU)": {
-            "h1": r"^第\s*\d+\s*章\b", "h2": r"^\d+\.\d+\s",
-            "h3": r"^\d+\.\d+\.\d+\s", "h4": r"^\d+\.\d+\.\d+\.\d+\s",
+        "第X章 / X.X / X.X.X": {
+            "h1": r"^第\s*\d+\s*章\b", "h2": r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
+            "h3": r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))", "h4": r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
         },
-        "X / X.X / X.X.X (纯数字)": {
-            "h1": r"^\d+\s", "h2": r"^\d+\.\d+\s",
-            "h3": r"^\d+\.\d+\.\d+\s", "h4": r"^\d+\.\d+\.\d+\.\d+\s",
+        "X / X.X / X.X.X (纯数字, SCAU)": {
+            "h1": r"^\d+(\s|(?=[\u4e00-\u9fff]))", "h2": r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
+            "h3": r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))", "h4": r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
         },
         "一、/ (一) / 1. (中文序号)": {
             "h1": r"^[一二三四五六七八九十百]+、", "h2": r"^（[一二三四五六七八九十百]+）",
             "h3": r"^\d+\.\s", "h4": r"^\(\d+\)",
         },
         "Chapter X / X.X / X.X.X (英文)": {
-            "h1": r"(?i)^Chapter\s+\d+", "h2": r"^\d+\.\d+\s",
-            "h3": r"^\d+\.\d+\.\d+\s", "h4": r"^\d+\.\d+\.\d+\.\d+\s",
+            "h1": r"(?i)^Chapter\s+\d+", "h2": r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
+            "h3": r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))", "h4": r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
         },
     }
     PRESET_NAMES = list(HEADING_PRESETS.keys())
@@ -2187,6 +2187,7 @@ def main(theme="sandstone"):
 
 if __name__ == "__main__":
     main()
+
 
 
 

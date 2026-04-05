@@ -314,11 +314,13 @@ def _infer_heading_level_from_text(text, cfg, text_first=False, para=None):
     elif h2_re.match(text):
         candidate = 2
 
-    if candidate in (2, 3, 4) and para is not None and not _layout_allows_heading_level(para, candidate):
+    if candidate is None:
+        return None
+    if not _looks_like_auto_heading_text(text, candidate):
+        return None
+    if para is not None and not _layout_allows_heading_level(para, candidate):
         return None
     return candidate
-
-
 def _get_rfonts_value(rpr, attr_name):
     if rpr is None:
         return None
@@ -557,11 +559,20 @@ def demote_abstract_heading_styles(doc, cfg, include_abstract=True, aggressive_b
 
 
 _SENTENCE_ENDINGS = set("。！？；")
+_YEAR_LIKE_HEADING_RE = re.compile(r"^\d{4}\s*年")
 
 
-
-
-
+def _looks_like_auto_heading_text(text, level):
+    text = (text or "").strip()
+    if not text:
+        return False
+    if len(text) > 50:
+        return False
+    if text[-1] in _SENTENCE_ENDINGS:
+        return False
+    if level == 1 and _YEAR_LIKE_HEADING_RE.match(text):
+        return False
+    return True
 
 def auto_assign_heading_styles(doc, cfg, skip_para_ids=None, preserve_look=False):
     skip_para_ids = set(skip_para_ids or ())
@@ -599,22 +610,25 @@ def auto_assign_heading_styles(doc, cfg, skip_para_ids=None, preserve_look=False
 
         target_level = None
 
-        if _match_chapter_heading(t, cfg, text_first=text_first):
+        if t_nospace in special_h1_set:
             target_level = 1
-        elif t_nospace in special_h1_set:
+        elif _match_chapter_heading(t, cfg, text_first=text_first):
             target_level = 1
         elif appendix_re.match(t):
             target_level = 1
-        else:
-            if len(t) <= 50 and t[-1] not in _SENTENCE_ENDINGS:
-                if h4_re.match(t):
-                    target_level = 4
-                elif h3_re.match(t):
-                    target_level = 3
-                elif h2_re.match(t):
-                    target_level = 2
+        elif _looks_like_auto_heading_text(t, 2):
+            if h4_re.match(t):
+                target_level = 4
+            elif h3_re.match(t):
+                target_level = 3
+            elif h2_re.match(t):
+                target_level = 2
 
         if target_level is None:
+            continue
+        if target_level != 1 and not _looks_like_auto_heading_text(t, target_level):
+            continue
+        if target_level == 1 and t_nospace not in special_h1_set and not _looks_like_auto_heading_text(t, 1):
             continue
         if not _layout_allows_heading_level(para, target_level):
             continue

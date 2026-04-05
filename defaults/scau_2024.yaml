@@ -23,7 +23,7 @@ page:
     right: 2.4
   gutter: 0.5                       # 装订线 (cm)
   header_distance: 1.5              # 页眉上边距 (cm)
-  footer_distance: 1.25             # 页脚下边距 (cm)
+  footer_distance: 1.75             # 页脚下边距 (cm)
 
 # ---- 字体 ----
 fonts:
@@ -54,33 +54,43 @@ headings:
   h1:
     bold: true
     align: left                      # left / center / right / justify
+    space_before: 0
+    space_after: 0
   h2:
     bold: true
     align: left
+    space_before: 0
+    space_after: 0
   h3:
     bold: false
     align: left
+    space_before: 0
+    space_after: 0
   h4:
     bold: false
     align: left
-
+    space_before: 0
+    space_after: 0
 # ---- 正文格式 ----
 # first_line_indent 支持多单位（pt/cm/mm/in/中文字号）
 body:
   align: justify                     # 两端对齐
   first_line_indent: 24              # 首行缩进 (24pt = 2个中文字符)
   line_spacing: 1.5                  # 行距倍数
-
+  space_before: 0
+  space_after: 0
 # ---- 表格 ----
 table:
   line_spacing: 1.0                  # 表格内单倍行距
+  cell_align: center                 # 表格内容居中
   top_border_sz: 12                  # 顶线粗细 (1/8 pt)，12 = 1.5pt
   header_border_sz: 8                # 栏目线 (1/8 pt)，8 = 1pt
-  bottom_border_sz: 12              # 底线 (1/8 pt)，12 = 1.5pt
+  bottom_border_sz: 12               # 底线 (1/8 pt)，12 = 1.5pt
 
 # ---- 脚注 ----
 footnote:
   line_spacing: 1.0
+  align: justify
 
 # ---- 图表题 ----
 captions:
@@ -88,17 +98,21 @@ captions:
   figure_pattern: '^图\s*\d'             # 图题正则
   table_pattern: '^(续)?表\s*\d'         # 表题正则
   subfigure_pattern: '^\([a-z]\)'        # 分图题正则（可删除）
-  note_pattern: '^注[：:]'               # 表注正则
-  keep_with_next: true                   # 图表题防分页
-  check_numbering: true                  # 检查图表编号连续性
-  line_spacing: 1.5                      # 题注/表注行距倍数
+  note_pattern: '^注[：:]'                 # 图表注释/资料来源行正则
+  keep_with_next: true                     # 图表题防分页
+  check_numbering: true                    # 检查图表编号连续性
+  line_spacing: 1.5                        # 题注/表注行距倍数
+  font: "宋体"
+  number_font: "Times New Roman"
+  size: 10.5
   # dynamic 仅适用于真正 Heading 样式 + Word 多级列表编号的规范文档；
   # 预检不通过时会自动回退 stable，并给出明确 warning。
-  include_chapter: true                  # 是否显示章节号（如 图2.1）
-  chapter_heading_level: 1               # 章节编号引用的标题级别（1=章，2=节）
-  chapter_separator: '.'                 # 章节号与图表序号之间的分隔符（可通过GUI修改）
-  caption_separator: ''                  # 编号与标题文字之间的附加分隔符
-  restart_per_chapter: true              # 是否在每章内重新从 1 编号
+  include_chapter: false                   # 华农规范要求图表全文连续编号（如 图1、表1）
+  chapter_heading_level: 1                 # 章节编号引用的标题级别（1=章，2=节）
+  chapter_separator: '.'                   # 章节号与图表序号之间的分隔符（可通过GUI修改）
+  caption_separator: ''                    # 编号与标题文字之间的附加分隔符
+  restart_per_chapter: false               # 华农规范要求图表全文连续编号
+
 # ---- 参考文献 ----
 references:
   first_line_indent: -24             # 悬挂缩进首行 (pt)
@@ -106,27 +120,53 @@ references:
 
 # ---- 页码 ----
 page_numbers:
-  front_format: "upperRoman"         # 前置部分: upperRoman / lowerRoman / decimal
-  body_format: "decimal"             # 正文部分: decimal / lowerRoman
+  front_format: "upperRoman"        # 前置部分: upperRoman / lowerRoman / decimal
+  body_format: "decimal"            # 正文部分: decimal / lowerRoman
   front_start: 1                     # 前置部分起始页码
   body_start: 1                      # 正文起始页码
-  only_insert: false                # 仅按现有分节调整页码，不自动补分节
-  only_insert: false                # 仅按现有分节调整页码，不自动补分节
+  only_insert: false                 # 仅按现有分节调整页码，不自动补分节
+  front_position: "center"          # 前置部分页码居中
+  body_position: "center"           # 正文页码居中
+  body_odd_position: "center"
+  body_even_position: "center"
+  decorator: "{page}"               # 页码两侧不加修饰线
+  font: ""                          # 留空时回退 Times New Roman
+  bold: false
+
+# ---- 页眉 ----
+# 华农本科论文规范要求全部不加页眉。
+header_footer:
+  enabled: false
+  scope: "body"
+  only_insert: false
+  different_odd_even: false
+  first_page_no_header: false
+  odd_page_text: ""
+  even_page_text: ""
+  font: "宋体"
+  font_size: 10.5
+  bold: false
+  odd_page_align: "center"
+  even_page_align: "center"
+  border_bottom: false
+  border_bottom_width: 0.75
+  border_bottom_style: "single"
 
 # ---- 目录 ----
 toc:
   depth: 3                           # 目录显示层级 (1-4)
   enabled: true                      # 是否生成目录
   only_insert: false                 # 仅插入/更新目录，不改正文等其他排版
-  exclude_abstract_headings: true   # 摘要/Abstract 不参与目录；会解除其 Heading 样式并尽量保留原格式
+  exclude_abstract_headings: true    # 摘要/Abstract 不参与目录；会解除其 Heading 样式并尽量保留原格式
   font: "宋体"                       # 目录内容字体
   font_size: 12                      # 目录内容字号 (pt)，小四
-  bold: false                        # 二级及以下目录条目是否加粗
-  h1_font: "黑体"                    # 一级目录条目字体
-  h1_font_size: 14                   # 一级目录条目字号 (pt)，四号
-  h1_bold: false                     # 一级目录条目是否加粗
+  bold: false                        # 目录条目不加粗
+  h1_font: "宋体"                    # 华农规范目录各级条目统一用宋体小四
+  h1_font_size: 12                   # 一级目录条目字号 (pt)，小四
+  h1_bold: false                     # 一级目录条目不加粗
   line_spacing: 1.5                  # 目录行距
-
+  space_before: 0
+  space_after: 0
 # ---- 特殊标题映射 ----
 # match: 原文关键词（去除空格后匹配）
 # display: 显示文本（可包含全角空格用于间距控制）
@@ -138,6 +178,9 @@ special_titles:
   - match: "目录"
     display: "目        录"
     align: center
+  - match: "英文缩略词（符号表）"
+    display: "英文缩略词（符号表）"
+    align: center
   - match: "参考文献"
     display: "参  考  文  献"
     align: center
@@ -145,13 +188,17 @@ special_titles:
     display: "致        谢"
     align: center
 
+# ---- 前置部分 ----
+front_matter:
+  mode: "auto"                      # auto / skip / format
+
 # ---- 结构识别模式 (正则表达式) ----
 sections:
-  chapter_pattern: '^第\s*\d+\s*章\b'         # 一级标题编号格式
-  appendix_pattern: '^附录\s*[A-Z]'           # 附录标题格式
-  h2_pattern: '^\d+\.\d+\s'                   # 二级标题
-  h3_pattern: '^\d+\.\d+\.\d+\s'              # 三级标题
-  h4_pattern: '^\d+\.\d+\.\d+\.\d+\s'         # 四级标题
+  chapter_pattern: '^\d+(\s|(?=[\u4e00-\u9fff]))'     # 华农理工农科一级标题示例：1  绪论
+  appendix_pattern: '^附录\s*[A-Z]'                      # 附录标题格式
+  h2_pattern: '^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))'   # 二级标题
+  h3_pattern: '^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))'              # 三级标题
+  h4_pattern: '^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))'       # 四级标题
   special_h1:                                  # 特殊一级标题（无编号）
     - "参考文献"
     - "致谢"
@@ -169,7 +216,7 @@ cover:
   logo: "scau_logo.png"             # Logo 文件名（相对于配置文件目录）
   logo_width_pt: 343.2              # Logo 宽度 (pt)
   logo_height_pt: 96                # Logo 高度 (pt)
-  title_text: "本科毕业论文(或设计)"  # 封面大标题
+  title_text: "本科毕业论文"         # 如为毕业设计，请改为“本科毕业设计”
   title_font_size: 36                # 封面大标题字号 (pt)
   thesis_title_placeholder: "论文（或设计）题目"
   thesis_title_font: "黑体"
@@ -218,9 +265,4 @@ declarations:
 theme_fonts:
   latin: "Times New Roman"
   hans: "宋体"
-
-
-
-
-
 

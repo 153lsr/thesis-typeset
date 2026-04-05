@@ -336,7 +336,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
 
     renum_changes = []
     if sec.get("renumber_headings", False):
-        renum_changes = numbering.setup_multilevel_list(doc, cfg)
+        renum_changes = renumber_headings(doc, cfg, skip_para_ids=preserved_para_ids)
 
     requested_caption_mode, effective_caption_mode, caption_mode_warnings = numbering.resolve_caption_mode_after_normalization(
         doc, cfg, raw_reasons=raw_caption_reasons

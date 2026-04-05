@@ -102,6 +102,14 @@ def postprocess(docx_path, timeout=90, config=None, mode="full"):
         toc_line_spacing = 1.5
         toc_space_before_cfg = 0
         toc_space_after_cfg = 0
+    # 构建特殊标题映射：display 原文（含全角空格）→ match 原文（无空格）
+    special_toc_map = {}
+    if config:
+        for st in config.get("special_titles", []):
+            match_text = st.get("match", "")
+            display_text = st.get("display", match_text)
+            if display_text != match_text:
+                special_toc_map[display_text] = match_text
 
     result = {"ok": False, "error": None, "pid": None}
     done_event = threading.Event()
@@ -134,6 +142,20 @@ def postprocess(docx_path, timeout=90, config=None, mode="full"):
                 for toc in doc.TablesOfContents:
                     toc.Update()
                 doc.Fields.Update()
+                # 在 TOC Range 内用 Find/Replace 去除特殊标题的全角空格
+                if special_toc_map:
+                    for toc in doc.TablesOfContents:
+                        for display_text, match_text in special_toc_map.items():
+                            toc_find = toc.Range.Find
+                            toc_find.ClearFormatting()
+                            toc_find.Replacement.ClearFormatting()
+                            toc_find.Text = display_text
+                            toc_find.Replacement.Text = match_text
+                            toc_find.Forward = True
+                            toc_find.Wrap = 0  # wdFindStop
+                            toc_find.MatchCase = True
+                            toc_find.MatchWholeWord = False
+                            toc_find.Execute(Replace=2)  # wdReplaceAll
                 print("[2/3] Done.", flush=True)
 
                 print(f"[3/3] Fixing TOC fonts (L1: {toc_h1_ea} {toc_h1_size}pt, L2+: {toc_ea} {toc_size}pt)...", flush=True)
@@ -150,6 +172,7 @@ def postprocess(docx_path, timeout=90, config=None, mode="full"):
                             level = int(m.group(1))
                         is_level1 = level == 1
                         level_font_size = toc_h1_size if is_level1 else toc_size
+
                         style_obj = p.Style
                         style_fmt = style_obj.ParagraphFormat
                         style_name = str(sname)
@@ -233,5 +256,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
 

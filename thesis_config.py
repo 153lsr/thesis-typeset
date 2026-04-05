@@ -49,7 +49,7 @@ DEFAULT_CONFIG = {
         "margins": {"top": 2.4, "bottom": 2.4, "left": 2.4, "right": 2.4},
         "gutter": 0.5,
         "header_distance": 1.5,
-        "footer_distance": 1.25,
+        "footer_distance": 1.75,
     },
     "fonts": {
         "latin": "Times New Roman",
@@ -107,11 +107,11 @@ DEFAULT_CONFIG = {
         "font": "宋体",
         "number_font": "Times New Roman",
         "size": 10.5,
-        "include_chapter": True,
+        "include_chapter": False,
         "chapter_heading_level": 1,
         "chapter_separator": ".",
         "caption_separator": "",
-        "restart_per_chapter": True,
+        "restart_per_chapter": False,
     },
     "references": {
         "first_line_indent": -24,
@@ -123,11 +123,10 @@ DEFAULT_CONFIG = {
         "front_start": 1,
         "body_start": 1,
         "only_insert": False,
-        "only_insert": False,
         "front_position": "center",
         "body_position": "center",
-        "body_odd_position": "right",
-        "body_even_position": "left",
+        "body_odd_position": "center",
+        "body_even_position": "center",
         "decorator": "{page}",
         "font": "",
         "bold": False,
@@ -136,17 +135,16 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "scope": "body",
         "only_insert": False,
-        "only_insert": False,
-        "odd_page_text": "华南农业大学 硕士学位论文",
-        "even_page_text": "{chapter_title}",
-        "different_odd_even": True,
+        "odd_page_text": "",
+        "even_page_text": "",
+        "different_odd_even": False,
         "first_page_no_header": False,
         "font": "宋体",
         "font_size": 10.5,
         "bold": False,
         "odd_page_align": "center",
         "even_page_align": "center",
-        "border_bottom": True,
+        "border_bottom": False,
         "border_bottom_width": 0.75,
         "border_bottom_style": "single",
     },
@@ -159,8 +157,8 @@ DEFAULT_CONFIG = {
         "font_size": 12,
         "bold": False,
         "line_spacing": 1.5,
-        "h1_font": "黑体",
-        "h1_font_size": 14,
+        "h1_font": "宋体",
+        "h1_font_size": 12,
         "h1_bold": False,
         "space_before": 0,
         "space_after": 0,
@@ -168,6 +166,7 @@ DEFAULT_CONFIG = {
     "special_titles": [
         {"match": "摘要", "display": "摘        要", "align": "center"},
         {"match": "目录", "display": "目        录", "align": "center"},
+        {"match": "英文缩略词（符号表）", "display": "英文缩略词（符号表）", "align": "center"},
         {"match": "参考文献", "display": "参  考  文  献", "align": "center"},
         {"match": "致谢", "display": "致        谢", "align": "center"},
     ],
@@ -175,7 +174,7 @@ DEFAULT_CONFIG = {
         "mode": "auto",  # auto | skip | format
     },
     "sections": {
-        "chapter_pattern": r"^第\s*\d+\s*章\b",
+        "chapter_pattern": r"^\d+(\s|(?=[\u4e00-\u9fff]))",
         "appendix_pattern": r"^附录\s*[A-Z]",
         "h2_pattern": r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
         "h3_pattern": r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))",
@@ -192,7 +191,7 @@ DEFAULT_CONFIG = {
         "logo": "scau_logo.png",
         "logo_width_pt": 343.2,
         "logo_height_pt": 96,
-        "title_text": "本科毕业论文(或设计)",
+        "title_text": "本科毕业论文",
         "title_font_size": 36,
         "thesis_title_placeholder": "论文（或设计）题目",
         "thesis_title_font": "黑体",
@@ -315,8 +314,6 @@ def dump_default_config():
         raise RuntimeError("需要 pyyaml。请运行: pip install pyyaml")
     return yaml.dump(DEFAULT_CONFIG, allow_unicode=True, default_flow_style=False,
                      sort_keys=False)
-
-
 
 
 
