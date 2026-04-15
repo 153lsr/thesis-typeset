@@ -12,94 +12,12 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.parts.numbering import NumberingPart
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from ._common import get_paragraph_heading_level
+from ._common import get_paragraph_heading_level, matches_chapter_heading, make_field_runs
 
 CAPTION_MODE_STABLE = "stable"
 CAPTION_MODE_DYNAMIC = "dynamic"
 
 
-_AR_CHAPTER_PATTERN = r"^第\s*\d+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
-_CN_CHAPTER_PATTERN = r"^第\s*[一二三四五六七八九十百千零两〇]+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
-
-
-def _iter_chapter_patterns(sec_cfg):
-    configured = sec_cfg.get("chapter_pattern", _AR_CHAPTER_PATTERN)
-    ordered = [configured, _CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN]
-    seen = set()
-    for pat in ordered:
-        if pat and pat not in seen:
-            seen.add(pat)
-            yield pat
-
-
-def _matches_chapter_heading(text, sec_cfg):
-    return any(re.match(pat, text) for pat in _iter_chapter_patterns(sec_cfg))
-
-
-def _make_field_runs(instr, display, rPr_el=None, font=None, size=None, latin_font=None):
-    """创建 Word 域代码的 XML 元素.
-
-    Args:
-        instr: 域指令 (如 "SEQ Figure \\* ARABIC")
-        display: 显示文本（仅用于需要预设显示值的域，SEQ域通常留空）
-        rPr_el: 源 run 属性
-        font: 字体名称 (用于覆盖)
-        size: 字号 (磅)
-        latin_font: 拉丁字体名称
-    """
-    els = []
-    for ftype in ('begin', None, 'separate', None, 'end'):
-        r = OxmlElement('w:r')
-
-        # 设置 run 属性
-        if rPr_el is not None:
-            if font is not None or size is not None:
-                # 需要修改字体，创建新的 rPr
-                r_pr = copy.deepcopy(rPr_el)
-                if font is not None:
-                    r_fonts = r_pr.find(qn("w:rFonts"))
-                    if r_fonts is None:
-                        r_fonts = OxmlElement("w:rFonts")
-                        r_pr.append(r_fonts)
-                    r_fonts.set(qn("w:eastAsia"), font)
-                    if latin_font:
-                        r_fonts.set(qn("w:ascii"), latin_font)
-                        r_fonts.set(qn("w:hAnsi"), latin_font)
-                        r_fonts.set(qn("w:cs"), latin_font)
-                if size is not None:
-                    sz = r_pr.find(qn("w:sz"))
-                    if sz is None:
-                        sz = OxmlElement("w:sz")
-                        r_pr.append(sz)
-                    sz.set(qn("w:val"), str(int(size * 2)))
-                    sz_cs = r_pr.find(qn("w:szCs"))
-                    if sz_cs is None:
-                        sz_cs = OxmlElement("w:szCs")
-                        r_pr.append(sz_cs)
-                    sz_cs.set(qn("w:val"), str(int(size * 2)))
-                r.append(r_pr)
-            else:
-                r.append(copy.deepcopy(rPr_el))
-
-        if ftype in ('begin', 'separate', 'end'):
-            fc = OxmlElement('w:fldChar')
-            fc.set(qn('w:fldCharType'), ftype)
-            # 标记域需要更新（仅对 end 类型设置）
-            if ftype == 'end':
-                fc.set(qn('w:dirty'), '1')
-            r.append(fc)
-        elif len(els) == 1:
-            it = OxmlElement('w:instrText')
-            it.set(qn('xml:space'), 'preserve')
-            it.text = f' {instr} '
-            r.append(it)
-        else:
-            t = OxmlElement('w:t')
-            t.set(qn('xml:space'), 'preserve')
-            t.text = display
-            r.append(t)
-        els.append(r)
-    return els
 
 
 def get_caption_mode(cfg):
@@ -164,7 +82,9 @@ def precheck_dynamic_caption_mode(doc, cfg):
     try:
         from ._titles import _get_special_title_map
         st_map = _get_special_title_map(cfg)
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[警告] 获取特殊标题映射失败: {e}", file=sys.stderr)
         st_map = {}
 
     special_set = set(st_map.keys())
@@ -201,7 +121,7 @@ def precheck_dynamic_caption_mode(doc, cfg):
         level = get_paragraph_heading_level(para)
 
         suspected_level = None
-        if _matches_chapter_heading(text, sec_cfg):
+        if matches_chapter_heading(text, cfg):
             suspected_level = 1
         elif h2_pat.match(text):
             suspected_level = 2
@@ -222,7 +142,7 @@ def precheck_dynamic_caption_mode(doc, cfg):
             continue
 
         manual_pattern = manual_patterns.get(level)
-        if (level == 1 and _matches_chapter_heading(text, sec_cfg)) or (manual_pattern and manual_pattern.match(text)):
+        if (level == 1 and matches_chapter_heading(text, cfg)) or (manual_pattern and manual_pattern.match(text)):
             add_reason(
                 f"标题“{_shorten_text(text)}”虽然是 Heading{level}，但编号仍是手打文本，不是 Word 多级列表"
             )
@@ -477,7 +397,9 @@ def _apply_numbering_to_headings(doc, num_id, cfg):
     try:
         from ._titles import _get_special_title_map
         st_map = _get_special_title_map(cfg)
-    except:
+    except Exception as e:
+        import sys
+        print(f"[警告] 获取特殊标题映射失败: {e}", file=sys.stderr)
         st_map = {}
 
     chap_pat = re.compile(sec.get("chapter_pattern", r"^第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章\b"))
@@ -520,7 +442,7 @@ def _apply_numbering_to_headings(doc, num_id, cfg):
             p_el.insert(0, p_pr)
 
         # 应用多级列表
-        if level == 1 and _matches_chapter_heading(t, sec):
+        if level == 1 and matches_chapter_heading(t, cfg):
             _set_numbering(p_pr, num_id, 0)
             new_t = _strip_manual_heading_prefix(t, 1, sec)
             if new_t != t:
@@ -619,7 +541,7 @@ def _auto_apply_heading_styles(doc, cfg):
         current_level = get_paragraph_heading_level(para)
 
         # 一级标题（章）
-        if _matches_chapter_heading(text, sec_cfg) and current_level != 1:
+        if matches_chapter_heading(text, cfg) and current_level != 1:
             para.style = doc.styles["Heading1"]
             changes.append(f'自动应用 Heading1: "{text[:30]}"')
 
@@ -636,58 +558,14 @@ def _auto_apply_heading_styles(doc, cfg):
     return changes
 
 
-def setup_figure_captions(doc, cfg):
-    """设置图题 SEQ 域.
-
-    使用 SEQ 域替代文本编号，新增图时编号自动更新。
-    """
-    # 如果需要章节号，先自动识别并应用标题样式
-    if cfg.get("captions", {}).get("include_chapter", False):
-        _auto_apply_heading_styles(doc, cfg)
-
-    cap_cfg = cfg.get("captions", {})
-    fig_pat = cap_cfg.get("figure_pattern", r"^图\s*\d")
-
-    changes = _apply_caption_seq(doc, fig_pat, "Figure", "图", cfg)
-
-    return changes
-
-
-def setup_table_captions(doc, cfg):
-    """设置表题 SEQ 域.
-
-    使用 SEQ 域替代文本编号，新增表时编号自动更新。
-    """
-    # 如果需要章节号，先自动识别并应用标题样式
-    if cfg.get("captions", {}).get("include_chapter", False):
-        _auto_apply_heading_styles(doc, cfg)
-
-    cap_cfg = cfg.get("captions", {})
-    tbl_pat = cap_cfg.get("table_pattern", r"^(续)?表\s*\d")
-
-    changes = _apply_caption_seq(doc, tbl_pat, "Table", "表", cfg)
-
-    return changes
-
-
 def _apply_caption_seq(doc, pattern, seq_name, label, cfg):
     """应用 SEQ 域到图/表题，按章编号时保留稳定的静态前缀编号."""
-    cap_cfg = cfg.get("captions", {})
+    cc = _get_caption_config(cfg)
+    cap_font, num_font, cap_size, latin_font = cc["cap_font"], cc["num_font"], cc["cap_size"], cc["latin_font"]
+    include_chapter, chapter_sep, caption_sep = cc["include_chapter"], cc["chapter_sep"], cc["caption_sep"]
+    restart_per_chapter = cc["restart_per_chapter"]
     pat = re.compile(pattern)
     changes = []
-
-    # 题注字体配置
-    cap_font = cap_cfg.get("font", "宋体")
-    num_font = cap_cfg.get("number_font", "Times New Roman")
-    cap_size = cap_cfg.get("size", 10.5)
-    latin_font = cfg.get("fonts", {}).get("latin", "Times New Roman")
-
-    # 编号格式配置
-    include_chapter = cap_cfg.get("include_chapter", False)
-    chapter_sep = cap_cfg.get("chapter_separator", ".")
-    caption_sep = cap_cfg.get("caption_separator", "")
-    chapter_heading_level = cap_cfg.get("chapter_heading_level", 1)
-    restart_per_chapter = cap_cfg.get("restart_per_chapter", False)
 
     for para in doc.paragraphs:
         t = para.text.strip()
@@ -704,26 +582,9 @@ def _apply_caption_seq(doc, pattern, seq_name, label, cfg):
         suffix_text = suffix_raw.lstrip() if caption_sep else suffix_raw
         number_tokens = [token for token in re.split(r"[.\-]", normalized_number) if token]
 
-        def token_or_empty(index):
-            return number_tokens[index] if index < len(number_tokens) else ""
-
         use_chapter_number = include_chapter
-        reset_with_chapter = restart_per_chapter
-        effective_chapter_sep = chapter_sep
 
-        p_el = para._element
-        p_pr = p_el.find(qn("w:pPr"))
-        if p_pr is None:
-            p_pr = OxmlElement("w:pPr")
-            p_el.insert(0, p_pr)
-
-        r_pr = None
-        if para.runs:
-            r_pr = para.runs[0]._element.find(qn("w:rPr"))
-
-        for child in list(p_el):
-            if child.tag != qn("w:pPr"):
-                p_el.remove(child)
+        p_el, r_pr = _prepare_caption_para(para)
 
         r = OxmlElement("w:r")
         r_pr_copy = _create_caption_rpr(r_pr, cap_font, cap_size, latin_font)
@@ -736,20 +597,17 @@ def _apply_caption_seq(doc, pattern, seq_name, label, cfg):
         p_el.append(r)
 
         if use_chapter_number:
-            full_number = normalized_number
-            r = OxmlElement("w:r")
-            r_pr_copy = _create_caption_rpr(r_pr, num_font, cap_size, latin_font)
-            if r_pr_copy is not None:
-                r.append(r_pr_copy)
-            t_el = OxmlElement("w:t")
-            t_el.set(qn("xml:space"), "preserve")
-            t_el.text = full_number
-            r.append(t_el)
-            p_el.append(r)
+            chapter_heading_level = cc["chapter_heading_level"]
+            chapter_display = chapter_sep.join(number_tokens[:-1])
+            for fel in _make_styleref_field(
+                r_pr, chapter_heading_level, num_font, cap_size, latin_font, chapter_display, doc=doc
+            ):
+                p_el.append(fel)
+            _append_literal_run(p_el, r_pr, chapter_sep, num_font, cap_size, latin_font)
         else:
-            seq_display = token_or_empty(-1)
-            seq_instr = f"SEQ {seq_name} \* ARABIC"
-            for fel in _make_field_runs(seq_instr, seq_display, r_pr, num_font, cap_size, latin_font):
+            seq_display = number_tokens[-1] if number_tokens else ""
+            seq_instr = f"SEQ {seq_name} \\* ARABIC"
+            for fel in make_field_runs(seq_instr, seq_display, r_pr, num_font, cap_size, latin_font):
                 p_el.append(fel)
 
         if caption_sep:
@@ -781,20 +639,12 @@ def _apply_caption_seq(doc, pattern, seq_name, label, cfg):
 
 def _apply_caption_dynamic(doc, pattern, seq_name, label, cfg):
     """Apply strict dynamic STYLEREF + SEQ fields to captions."""
-    cap_cfg = cfg.get("captions", {})
+    cc = _get_caption_config(cfg)
+    cap_font, num_font, cap_size, latin_font = cc["cap_font"], cc["num_font"], cc["cap_size"], cc["latin_font"]
+    include_chapter, chapter_sep, caption_sep = cc["include_chapter"], cc["chapter_sep"], cc["caption_sep"]
+    chapter_heading_level, restart_per_chapter = cc["chapter_heading_level"], cc["restart_per_chapter"]
     pat = re.compile(pattern)
     changes = []
-
-    cap_font = cap_cfg.get("font", "宋体")
-    num_font = cap_cfg.get("number_font", "Times New Roman")
-    cap_size = cap_cfg.get("size", 10.5)
-    latin_font = cfg.get("fonts", {}).get("latin", "Times New Roman")
-
-    include_chapter = cap_cfg.get("include_chapter", False)
-    chapter_sep = cap_cfg.get("chapter_separator", ".")
-    caption_sep = cap_cfg.get("caption_separator", "")
-    chapter_heading_level = cap_cfg.get("chapter_heading_level", 1)
-    restart_per_chapter = cap_cfg.get("restart_per_chapter", False)
 
     for para in doc.paragraphs:
         text = para.text.strip()
@@ -816,25 +666,14 @@ def _apply_caption_dynamic(doc, pattern, seq_name, label, cfg):
         seq_display = number_tokens[-1] if number_tokens else ""
         is_continued_table = label == "表" and prefix.startswith("续")
 
-        p_el = para._element
-        p_pr = p_el.find(qn("w:pPr"))
-        if p_pr is None:
-            p_pr = OxmlElement("w:pPr")
-            p_el.insert(0, p_pr)
-
-        r_pr = None
-        if para.runs:
-            r_pr = para.runs[0]._element.find(qn("w:rPr"))
-
-        for child in list(p_el):
-            if child.tag != qn("w:pPr"):
-                p_el.remove(child)
+        p_el, r_pr = _prepare_caption_para(para)
 
         _append_literal_run(p_el, r_pr, prefix, cap_font, cap_size, latin_font)
 
         if use_chapter_number:
             for fel in _make_styleref_field(
-                r_pr, chapter_heading_level, num_font, cap_size, latin_font, chapter_display
+                r_pr, chapter_heading_level, num_font, cap_size, latin_font, chapter_display,
+                doc=doc
             ):
                 p_el.append(fel)
             _append_literal_run(p_el, r_pr, chapter_sep, num_font, cap_size, latin_font)
@@ -847,7 +686,7 @@ def _apply_caption_dynamic(doc, pattern, seq_name, label, cfg):
             if use_chapter_number and restart_per_chapter:
                 seq_instr_parts.append(rf"\s {chapter_heading_level}")
         seq_instr = " ".join(seq_instr_parts)
-        for fel in _make_field_runs(seq_instr, seq_display, r_pr, num_font, cap_size, latin_font):
+        for fel in make_field_runs(seq_instr, seq_display, r_pr, num_font, cap_size, latin_font):
             p_el.append(fel)
 
         if caption_sep:
@@ -860,8 +699,15 @@ def _apply_caption_dynamic(doc, pattern, seq_name, label, cfg):
     return changes
 
 
-def _make_styleref_field(rPr_el, heading_level, font, size, latin_font, display_text=""):
+def _make_styleref_field(rPr_el, heading_level, font, size, latin_font, display_text="", doc=None):
     """创建 STYLEREF 域元素，用于引用标题编号."""
+    # Resolve the actual heading style name for STYLEREF field
+    style_name = f"Heading {heading_level}"
+    if doc is not None:
+        from ._common import get_heading_style
+        style_obj = get_heading_style(doc, heading_level)
+        if style_obj is not None:
+            style_name = style_obj.name
     els = []
     for ftype in ('begin', None, 'separate', None, 'end'):
         r = OxmlElement('w:r')
@@ -919,7 +765,7 @@ def _make_styleref_field(rPr_el, heading_level, font, size, latin_font, display_
         elif len(els) == 1:
             it = OxmlElement('w:instrText')
             it.set(qn('xml:space'), 'preserve')
-            it.text = f' STYLEREF {heading_level} \s '
+            it.text = f' STYLEREF "{style_name}" \\s '
             r.append(it)
         else:
             t = OxmlElement('w:t')
@@ -928,6 +774,38 @@ def _make_styleref_field(rPr_el, heading_level, font, size, latin_font, display_
             r.append(t)
         els.append(r)
     return els
+
+
+def _get_caption_config(cfg):
+    """Extract shared caption configuration from cfg."""
+    cap_cfg = cfg.get("captions", {})
+    return {
+        "cap_font": cap_cfg.get("font", "宋体"),
+        "num_font": cap_cfg.get("number_font", "Times New Roman"),
+        "cap_size": cap_cfg.get("size", 10.5),
+        "latin_font": cfg.get("fonts", {}).get("latin", "Times New Roman"),
+        "include_chapter": cap_cfg.get("include_chapter", False),
+        "chapter_sep": cap_cfg.get("chapter_separator", "."),
+        "caption_sep": cap_cfg.get("caption_separator", ""),
+        "chapter_heading_level": cap_cfg.get("chapter_heading_level", 1),
+        "restart_per_chapter": cap_cfg.get("restart_per_chapter", False),
+    }
+
+
+def _prepare_caption_para(para):
+    """Clear paragraph content for caption field insertion, return (p_el, r_pr)."""
+    p_el = para._element
+    p_pr = p_el.find(qn("w:pPr"))
+    if p_pr is None:
+        p_pr = OxmlElement("w:pPr")
+        p_el.insert(0, p_pr)
+    r_pr = None
+    if para.runs:
+        r_pr = para.runs[0]._element.find(qn("w:rPr"))
+    for child in list(p_el):
+        if child.tag != qn("w:pPr"):
+            p_el.remove(child)
+    return p_el, r_pr
 
 
 def _match_caption_parts(text, label):

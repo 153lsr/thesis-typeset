@@ -1,6 +1,8 @@
+import copy
 import os
 import re
 import sys
+import warnings
 
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
@@ -81,12 +83,14 @@ def parse_length(value):
         try:
             return Pt(float(s))
         except (ValueError, TypeError):
+            warnings.warn(f"parse_length: 无法解析 '{value}'，默认为 0pt", stacklevel=2)
             return Pt(0)
 
     num_str, unit = match.groups()
     try:
         num = float(num_str)
     except ValueError:
+        warnings.warn(f"parse_length: 无法解析 '{value}'，默认为 0pt", stacklevel=2)
         return Pt(0)
 
     # 根据单位后缀返回对应的 Length 对象
@@ -99,7 +103,7 @@ def parse_length(value):
     elif unit in ("in", "inch", "inches"):
         return Inches(num)
     else:
-        # 未知单位，默认为 pt
+        warnings.warn(f"parse_length: 未知单位 '{unit}'，按 pt 处理", stacklevel=2)
         return Pt(num)
 
 
@@ -373,6 +377,43 @@ for names in _HEADING_STYLE_NAMES.values():
     _ALL_HEADING_NAMES.update(names)
 
 
+# ---------------------------------------------------------------------------
+# 统一的章节标题正则模式与匹配辅助函数
+# ---------------------------------------------------------------------------
+_AR_CHAPTER_PATTERN = r"^第\s*\d+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
+_CN_CHAPTER_PATTERN = r"^第\s*[一二三四五六七八九十百千零两〇]+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
+
+
+def iter_chapter_patterns(cfg, text_first=False):
+    """Yield unique chapter-heading regex patterns in priority order."""
+    sec = cfg.get("sections", {}) if not isinstance(cfg.get("sections"), str) else cfg
+    configured = sec.get("chapter_pattern", _AR_CHAPTER_PATTERN)
+    ordered = (
+        [_CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN, configured]
+        if text_first
+        else [configured, _CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN]
+    )
+    seen = set()
+    for pat in ordered:
+        if pat and pat not in seen:
+            seen.add(pat)
+            yield pat
+
+
+def matches_chapter_heading(text, cfg, text_first=False):
+    """Return True if *text* matches any chapter-heading pattern."""
+    return any(re.match(pat, text) for pat in iter_chapter_patterns(cfg, text_first=text_first))
+
+
+def match_chapter_heading(text, cfg, text_first=False):
+    """Return the first regex MatchObject for *text*, or None."""
+    for pat in iter_chapter_patterns(cfg, text_first=text_first):
+        m = re.match(pat, text)
+        if m:
+            return m
+    return None
+
+
 def get_heading_style(doc, level):
     """通过 level (1-4) 获取文档中的标题样式对象，优先使用 style_id 匹配"""
     if level not in _HEADING_STYLE_IDS:
@@ -442,19 +483,6 @@ def is_heading(para, level=None):
         return False
     return is_heading_style(para.style, level)
 
-
-def _get_outline_heading_level_from_ppr(ppr):
-    if ppr is None:
-        return None
-    outline = ppr.find(qn("w:outlineLvl"))
-    if outline is None:
-        return None
-    val = outline.get(qn("w:val"))
-    try:
-        level = int(val) + 1
-    except (TypeError, ValueError):
-        return None
-    return level if 1 <= level <= 4 else None
 
 
 def get_paragraph_heading_level(para):
@@ -609,7 +637,7 @@ def _check_caption_numbering(doc, fig_pat, tbl_pat, cfg=None):
         t = para.text.strip()
         sn = para.style.name if para.style else ""
 
-        if sn in ("Heading 1", "样式1") and appendix_re.match(t):
+        if is_heading_style(sn, 1) and appendix_re.match(t):
             m = re.search(r"附录\s*([A-Z])", t)
             if m:
                 current_appendix = m.group(1)
@@ -725,8 +753,6 @@ def _check_caption_numbering(doc, fig_pat, tbl_pat, cfg=None):
             last_table_number = current_number
     return warnings
 
-def is_heading(para, level):
-    return para.style and para.style.name == f"Heading {level}"
 
 
 def contains_cjk(s):
@@ -768,4 +794,70 @@ def normalize_en_keywords(text):
     items = [x.strip(" ;；。,. ") for x in re.split(r"[;；]", m.group(1)) if x.strip(" ;；。,. ")]
     items = [title_case_phrase(x) for x in items]
     return "Key words: " + "; ".join(items)
+
+
+def normalize_title(text):
+    """Remove spaces and full-width spaces from title text for comparison."""
+    return text.replace(" ", "").replace("\u3000", "")
+
+
+def make_field_runs(instr, display, rPr_el=None, font=None, size=None, latin_font=None):
+    """Create Word field code XML elements (begin/instrText/separate/display/end).
+
+    Args:
+        instr: Field instruction (e.g. "SEQ Figure \\* ARABIC")
+        display: Display text (empty string for SEQ fields)
+        rPr_el: Source run properties element
+        font: EastAsia font override
+        size: Font size in points
+        latin_font: Latin font override (also sets ascii/hAnsi/cs)
+    """
+    els = []
+    for ftype in ('begin', None, 'separate', None, 'end'):
+        r = OxmlElement('w:r')
+        if rPr_el is not None:
+            if font is not None or size is not None:
+                r_pr = copy.deepcopy(rPr_el)
+                if font is not None:
+                    r_fonts = r_pr.find(qn("w:rFonts"))
+                    if r_fonts is None:
+                        r_fonts = OxmlElement("w:rFonts")
+                        r_pr.append(r_fonts)
+                    r_fonts.set(qn("w:eastAsia"), font)
+                    if latin_font:
+                        r_fonts.set(qn("w:ascii"), latin_font)
+                        r_fonts.set(qn("w:hAnsi"), latin_font)
+                        r_fonts.set(qn("w:cs"), latin_font)
+                if size is not None:
+                    sz = r_pr.find(qn("w:sz"))
+                    if sz is None:
+                        sz = OxmlElement("w:sz")
+                        r_pr.append(sz)
+                    sz.set(qn("w:val"), str(int(size * 2)))
+                    sz_cs = r_pr.find(qn("w:szCs"))
+                    if sz_cs is None:
+                        sz_cs = OxmlElement("w:szCs")
+                        r_pr.append(sz_cs)
+                    sz_cs.set(qn("w:val"), str(int(size * 2)))
+                r.append(r_pr)
+            else:
+                r.append(copy.deepcopy(rPr_el))
+        if ftype in ('begin', 'separate', 'end'):
+            fc = OxmlElement('w:fldChar')
+            fc.set(qn('w:fldCharType'), ftype)
+            if ftype == 'end':
+                fc.set(qn('w:dirty'), '1')
+            r.append(fc)
+        elif len(els) == 1:
+            it = OxmlElement('w:instrText')
+            it.set(qn('xml:space'), 'preserve')
+            it.text = f' {instr} '
+            r.append(it)
+        else:
+            t = OxmlElement('w:t')
+            t.set(qn('xml:space'), 'preserve')
+            t.text = display
+            r.append(t)
+        els.append(r)
+    return els
 

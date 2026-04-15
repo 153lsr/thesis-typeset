@@ -74,7 +74,180 @@ def _apply_word_spacing(fmt, side, value):
         setattr(fmt, space_attr, float(spec["value"]))
 
 
-def postprocess(docx_path, timeout=90, config=None, mode="full"):
+def _apply_three_line(tbl, top_sz, header_sz, bottom_sz):
+    """Apply three-line table borders via Word COM."""
+    nr = tbl.Rows.Count
+    nc = tbl.Columns.Count
+    tbl.Borders.Enable = False
+    for ci in range(1, nc + 1):
+        try:
+            c = tbl.Cell(1, ci)
+            b = c.Borders(-1)
+            b.LineStyle = 1
+            b.LineWidth = top_sz
+            b2 = c.Borders(-3)
+            b2.LineStyle = 1
+            b2.LineWidth = header_sz if nr > 1 else bottom_sz
+        except Exception:
+            pass
+    if nr > 1:
+        for ci in range(1, nc + 1):
+            try:
+                c = tbl.Cell(nr, ci)
+                b = c.Borders(-3)
+                b.LineStyle = 1
+                b.LineWidth = bottom_sz
+            except Exception:
+                pass
+
+
+def _split_spanning_tables(doc, config, log):
+    """Split tables that span page breaks into separate tables with 续表 captions."""
+    wdActiveEndPageNumber = 3
+
+    cap_cfg = config.get("captions", {}) if config else {}
+    tbl_pat = re.compile(cap_cfg.get("table_pattern", r"^(续)?表\s*\d"))
+    fonts_cfg = config.get("fonts", {}) if config else {}
+    ea_font = fonts_cfg.get("body", "宋体")
+    lat_font = fonts_cfg.get("latin", "Times New Roman")
+    cap_size = (config.get("sizes", {}) if config else {}).get("caption", 10.5)
+    tbl_cfg = config.get("table", {}) if config else {}
+    top_sz = tbl_cfg.get("top_border_sz", 12)
+    header_sz = tbl_cfg.get("header_border_sz", 8)
+    bottom_sz = tbl_cfg.get("bottom_border_sz", 12)
+
+    cover_sections = int((config or {}).get("_runtime", {}).get("custom_cover_sections", 0) or 0)
+
+    total = 0
+    for _ in range(20):
+        did_split = False
+        for ti in range(1, doc.Tables.Count + 1):
+            try:
+                tbl = doc.Tables(ti)
+            except Exception:
+                continue
+            if cover_sections > 0:
+                try:
+                    sec_idx = tbl.Range.Sections(1).Index
+                    if sec_idx <= cover_sections:
+                        continue
+                except Exception:
+                    pass
+            nr, nc = tbl.Rows.Count, tbl.Columns.Count
+            if nr < 4:
+                continue
+            try:
+                p1 = tbl.Rows(1).Range.Information(wdActiveEndPageNumber)
+                pn = tbl.Rows(nr).Range.Information(wdActiveEndPageNumber)
+            except Exception:
+                continue
+            if p1 <= 0 or pn <= 0 or p1 == pn:
+                continue
+
+            sr = None
+            for ri in range(2, nr):
+                try:
+                    rp = tbl.Rows(ri).Range.Information(wdActiveEndPageNumber)
+                except Exception:
+                    continue
+                if rp > p1:
+                    sr = ri
+                    break
+            if not sr or sr < 3:
+                continue
+
+            cap_text = ""
+            try:
+                r = doc.Range(tbl.Range.Start, tbl.Range.Start)
+                r.MoveStart(4, -1)
+                t = r.Text.strip().replace("\r", "").replace("\x07", "")
+                if tbl_pat.match(t):
+                    cap_text = t if t.startswith("续") else "续" + t
+            except Exception:
+                pass
+            if not cap_text:
+                cap_text = "续表"
+
+            log(f"  table {ti}: split row {sr}/{nr}, page {p1}->{pn}")
+
+            try:
+                ins = tbl.Range.Duplicate
+                ins.Collapse(0)
+                ins.InsertAfter(cap_text + "\r")
+                ins.Collapse(0)
+
+                overflow = nr - sr + 1
+                nt = doc.Tables.Add(ins, 1 + overflow, nc)
+
+                for ci in range(1, nc + 1):
+                    try:
+                        src = tbl.Cell(1, ci).Range.Duplicate
+                        src.MoveEnd(1, -1)
+                        nt.Cell(1, ci).Range.FormattedText = src.FormattedText
+                    except Exception:
+                        pass
+
+                for oi in range(sr, nr + 1):
+                    ni = oi - sr + 2
+                    for ci in range(1, nc + 1):
+                        try:
+                            src = tbl.Cell(oi, ci).Range.Duplicate
+                            src.MoveEnd(1, -1)
+                            nt.Cell(ni, ci).Range.FormattedText = src.FormattedText
+                        except Exception:
+                            pass
+
+                for ri in range(nr, sr - 1, -1):
+                    try:
+                        tbl.Rows(ri).Delete()
+                    except Exception:
+                        pass
+
+                # Remove phantom columns that Word may have added
+                attempts = 0
+                while nt.Columns.Count > nc and attempts < nc + 5:
+                    try:
+                        nt.Columns(nt.Columns.Count).Delete()
+                    except Exception:
+                        break
+                    attempts += 1
+
+                try:
+                    cr = doc.Range(nt.Range.Start, nt.Range.Start)
+                    cr.MoveStart(4, -1)
+                    cr.ParagraphFormat.Alignment = 1
+                    cr.Font.Name = lat_font
+                    cr.Font.NameFarEast = ea_font
+                    cr.Font.Size = cap_size
+                    cr.Font.Bold = False
+                except Exception:
+                    pass
+
+                try:
+                    nt.PreferredWidthType = tbl.PreferredWidthType
+                    nt.PreferredWidth = tbl.PreferredWidth
+                except Exception:
+                    pass
+
+                _apply_three_line(tbl, top_sz, header_sz, bottom_sz)
+                _apply_three_line(nt, top_sz, header_sz, bottom_sz)
+
+                total += 1
+                did_split = True
+                break
+            except Exception as e:
+                log(f"  split failed: {e}")
+        if not did_split:
+            break
+
+    if total:
+        log(f"  {total} table(s) split across page breaks.")
+    return total
+
+
+def postprocess(docx_path, timeout=90, config=None, mode="full", log=None):
+    if log is None:
+        log = print
     docx_path = os.path.abspath(docx_path)
     if not os.path.exists(docx_path):
         raise PostprocessError(f"File not found: {docx_path}")
@@ -128,17 +301,17 @@ def postprocess(docx_path, timeout=90, config=None, mode="full"):
             except Exception:
                 result["pid"] = None
 
-            print("[1/3] Opening document...", flush=True)
+            log("[1/3] Opening document...")
             doc = word.Documents.Open(
                 docx_path,
                 ConfirmConversions=False,
                 ReadOnly=False,
                 AddToRecentFiles=False,
             )
-            print("[1/3] Done.", flush=True)
+            log("[1/3] Done.")
 
             if mode == "full":
-                print("[2/3] Updating TOC and fields...", flush=True)
+                log("[2/3] Updating TOC and fields...")
                 for toc in doc.TablesOfContents:
                     toc.Update()
                 doc.Fields.Update()
@@ -156,9 +329,9 @@ def postprocess(docx_path, timeout=90, config=None, mode="full"):
                             toc_find.MatchCase = True
                             toc_find.MatchWholeWord = False
                             toc_find.Execute(Replace=2)  # wdReplaceAll
-                print("[2/3] Done.", flush=True)
+                log("[2/3] Done.")
 
-                print(f"[3/3] Fixing TOC fonts (L1: {toc_h1_ea} {toc_h1_size}pt, L2+: {toc_ea} {toc_size}pt)...", flush=True)
+                log(f"[3/3] Fixing TOC fonts")
                 seen_toc_styles = set()
                 for toc in doc.TablesOfContents:
                     for p in toc.Range.Paragraphs:
@@ -197,11 +370,14 @@ def postprocess(docx_path, timeout=90, config=None, mode="full"):
                         p.Format.LineSpacing = style_fmt.LineSpacing
                         _apply_word_spacing(p.Format, "before", toc_space_before_cfg)
                         _apply_word_spacing(p.Format, "after", toc_space_after_cfg)
-                print("[3/3] Done.", flush=True)
+                log("[3/3] Done.")
+
+                _split_spanning_tables(doc, config, log)
+
             else:
-                print("[2/2] Updating fields...", flush=True)
+                log("[2/2] Updating fields...")
                 doc.Fields.Update()
-                print("[2/2] Done.", flush=True)
+                log("[2/2] Done.")
 
             doc.Save()
             doc.Close()
@@ -233,7 +409,7 @@ def postprocess(docx_path, timeout=90, config=None, mode="full"):
         )
 
     if result["ok"]:
-        print(f"OK {docx_path}")
+        log(f"OK {docx_path}")
         return docx_path
 
     raise PostprocessError(result["error"] or "Unknown Word COM post-processing error")

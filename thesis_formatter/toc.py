@@ -1,5 +1,6 @@
 from ._titles import _find_special_display
-from ._common import get_paragraph_heading_level, parse_length, line_spacing_to_ooxml, paragraph_spacing_to_ooxml
+from ._common import get_paragraph_heading_level, parse_length, line_spacing_to_ooxml, paragraph_spacing_to_ooxml, normalize_title
+from .headings import _get_paragraph_outline_level
 from .page import find_first_body_heading
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -77,7 +78,7 @@ def _is_toc_sdt(sdt, ns):
 
 
 def insert_toc(doc, cfg):
-    toc_match = _find_special_display(cfg, "\u76ee\u5f55", raw=True)
+    toc_match = _find_special_display(cfg, "目录", raw=True)
     toc_depth = cfg["toc"]["depth"]
     h1_font = cfg["fonts"]["h1"]
     h1_sz_hp = str(int(cfg["sizes"]["h1"] * 2))
@@ -93,8 +94,21 @@ def insert_toc(doc, cfg):
     latin = cfg["fonts"]["latin"]
 
     first_h1_el = None
+    toc_match_normalized = normalize_title(toc_match)
     for para in list(doc.paragraphs):
-        if get_paragraph_heading_level(para) != 1:
+        level = get_paragraph_heading_level(para)
+        if level is None:
+            olvl = _get_paragraph_outline_level(para)
+            if olvl is not None:
+                level = olvl
+        if level != 1:
+            if not para.text.strip():
+                continue
+            t_nospace = normalize_title(para.text.strip())
+            if t_nospace != toc_match_normalized:
+                continue
+            # Match by text even without heading level (e.g., toc_only mode)
+            para._element.getparent().remove(para._element)
             continue
         t = para.text.strip().replace(" ", "").replace("\u3000", "")
         if t == toc_match:
@@ -119,7 +133,7 @@ def insert_toc(doc, cfg):
         if _is_toc_sdt(sdt, ns):
             body.remove(sdt)
 
-    toc_display = _find_special_display(cfg, "\u76ee\u5f55")
+    toc_display = _find_special_display(cfg, "目录")
     toc_title = OxmlElement("w:p")
     toc_title_ppr = OxmlElement("w:pPr")
     toc_title_jc = OxmlElement("w:jc")
@@ -129,8 +143,8 @@ def insert_toc(doc, cfg):
     toc_title_spacing = OxmlElement("w:spacing")
     toc_title_spacing.set(qn("w:before"), "0")
     toc_title_spacing.set(qn("w:after"), "0")
-    toc_title_spacing.set(qn("w:line"), "360")
-    toc_title_spacing.set(qn("w:lineRule"), "auto")
+    toc_title_spacing.set(qn("w:line"), toc_ls_twips)
+    toc_title_spacing.set(qn("w:lineRule"), toc_ls_rule)
     toc_title_ppr.append(toc_title_spacing)
     toc_title.append(toc_title_ppr)
 
@@ -203,7 +217,7 @@ def insert_toc(doc, cfg):
     ph_rpr.append(ph_sz)
     run_placeholder.append(ph_rpr)
     ph_text = OxmlElement("w:t")
-    ph_text.text = "\u8bf7\u5728 Word \u4e2d\u53f3\u952e\u6b64\u5904 \u2192 \u66f4\u65b0\u57df \u2192 \u66f4\u65b0\u6574\u4e2a\u76ee\u5f55"
+    ph_text.text = "请在 Word 中右键此处 → 更新域 → 更新整个目录"
     run_placeholder.append(ph_text)
     toc_field.append(run_placeholder)
 

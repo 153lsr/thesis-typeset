@@ -1,32 +1,15 @@
 import copy
 import re
+import sys
 
-from ._common import _ALIGN_MAP, set_rfonts, get_paragraph_heading_level, parse_length
+from ._common import _ALIGN_MAP, set_rfonts, get_paragraph_heading_level, parse_length, matches_chapter_heading, match_chapter_heading, normalize_title
 from ._titles import _find_special_display
+from .headings import _compile_section_patterns
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-
 from docx.shared import Cm
-
-
-_AR_CHAPTER_PATTERN = r"^第\s*\d+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
-_CN_CHAPTER_PATTERN = r"^第\s*[一二三四五六七八九十百千零两〇]+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
-
-
-def _iter_chapter_patterns(sec, text_first=False):
-    configured = sec.get("chapter_pattern", _AR_CHAPTER_PATTERN)
-    ordered = [_CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN, configured] if text_first else [configured, _CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN]
-    seen = set()
-    for pat in ordered:
-        if pat and pat not in seen:
-            seen.add(pat)
-            yield pat
-
-
-def _matches_chapter_heading(text, sec, text_first=False):
-    return any(re.match(pat, text) for pat in _iter_chapter_patterns(sec, text_first=text_first))
 
 
 def normalize_sections(doc, cfg):
@@ -42,8 +25,8 @@ def normalize_sections(doc, cfg):
         try:
             for p in section.header.paragraphs:
                 p.clear()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[警告] 页眉清理失败，已跳过: {e}", file=sys.stderr)
 
 
 def add_page_number_field(paragraph, cfg, align="center"):
@@ -180,43 +163,43 @@ def insert_page_break_after(paragraph):
     p_element.addnext(new_p)
 
 
-def _normalize_title(text):
-    return text.replace(" ", "").replace("\u3000", "")
-
-
-
-
 
 def find_first_body_heading(doc, cfg):
     sec = cfg.get("sections", {})
     text_first = bool(cfg.get("toc", {}).get("only_insert", False))
-    appendix_re = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
+    appendix_re, _, _, _ = _compile_section_patterns(cfg)
 
     skip_titles = set()
     for entry in cfg.get("special_titles", []):
         match = entry.get("match", "")
         display = entry.get("display", "")
         if match:
-            skip_titles.add(_normalize_title(match))
+            skip_titles.add(normalize_title(match))
         if display:
-            skip_titles.add(_normalize_title(display))
+            skip_titles.add(normalize_title(display))
     for title in sec.get("special_h1", []):
-        skip_titles.add(_normalize_title(title))
-    skip_titles.add(_normalize_title(_find_special_display(cfg, "目录", raw=True)))
+        skip_titles.add(normalize_title(title))
+    skip_titles.add(normalize_title(_find_special_display(cfg, "目录", raw=True)))
 
     headings = []
     for para in doc.paragraphs:
-        if get_paragraph_heading_level(para) != 1:
+        hlevel = get_paragraph_heading_level(para)
+        if hlevel is None:
+            from .headings import _get_paragraph_outline_level
+            olvl = _get_paragraph_outline_level(para)
+            if olvl is not None:
+                hlevel = olvl
+        if hlevel != 1:
             continue
         text = para.text.strip()
         if not text:
             continue
-        headings.append((para, text, _normalize_title(text)))
+        headings.append((para, text, normalize_title(text)))
 
     for para, text, normalized in headings:
         if normalized in skip_titles or appendix_re.match(text):
             continue
-        if _matches_chapter_heading(text, sec, text_first=text_first):
+        if matches_chapter_heading(text, cfg, text_first=text_first):
             return para
 
     for para, text, normalized in headings:
@@ -285,28 +268,14 @@ def _finalize_cover_section_page_numbers(doc, cfg, body_section_index=None):
     pn = cfg["page_numbers"]
     set_section_page_number_format(doc.sections[first_non_cover_idx], fmt=pn["front_format"], start=pn["front_start"])
 
-def _setup_single_section_pn(doc, cfg):
-    pn = cfg["page_numbers"]
-    body_pos = pn.get("body_position", "center")
-    body_odd = pn.get("body_odd_position", "right")
-    body_even = pn.get("body_even_position", "left")
-    need_alternate = body_pos == "alternate"
-    hf_diff_oe = cfg.get("header_footer", {}).get("different_odd_even", False) and \
-                 cfg.get("header_footer", {}).get("enabled", False)
-    need_even_odd = need_alternate or hf_diff_oe
-
-    section = doc.sections[0]
-    set_section_page_number_format(section, fmt=pn["body_format"], start=pn["body_start"])
-
-    if need_even_odd:
-        _set_even_odd_on_doc(doc)
-
+def _setup_section_footer_pn(section, cfg, pos, need_alternate, need_even_odd, body_odd, body_even):
+    """Set up page number fields in a single section's footer."""
     footer = section.footer
     footer.is_linked_to_previous = False
     for p in footer.paragraphs:
         p.clear()
 
-    if need_alternate:
+    if pos == "alternate":
         fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
         add_page_number_field(fp, cfg, align=body_odd)
         even_footer = section.even_page_footer
@@ -316,7 +285,7 @@ def _setup_single_section_pn(doc, cfg):
         ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
         add_page_number_field(ep, cfg, align=body_even)
     else:
-        actual_pos = body_pos if body_pos != "alternate" else "center"
+        actual_pos = pos if pos != "alternate" else "center"
         fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
         add_page_number_field(fp, cfg, align=actual_pos)
         if need_even_odd:
@@ -328,16 +297,37 @@ def _setup_single_section_pn(doc, cfg):
             add_page_number_field(ep, cfg, align=actual_pos)
 
 
+def _resolve_even_odd(cfg, body_pos):
+    """Determine if odd/even page differentiation is needed."""
+    need_alternate = body_pos == "alternate"
+    hf_diff_oe = cfg.get("header_footer", {}).get("different_odd_even", False) and \
+                 cfg.get("header_footer", {}).get("enabled", False)
+    return need_alternate, need_alternate or hf_diff_oe
+
+
+def _setup_single_section_pn(doc, cfg):
+    pn = cfg["page_numbers"]
+    body_pos = pn.get("body_position", "center")
+    body_odd = pn.get("body_odd_position", "right")
+    body_even = pn.get("body_even_position", "left")
+    need_alternate, need_even_odd = _resolve_even_odd(cfg, body_pos)
+
+    section = doc.sections[0]
+    set_section_page_number_format(section, fmt=pn["body_format"], start=pn["body_start"])
+
+    if need_even_odd:
+        _set_even_odd_on_doc(doc)
+
+    _setup_section_footer_pn(section, cfg, body_pos, need_alternate, need_even_odd, body_odd, body_even)
+
+
 def _apply_page_numbers_to_sections(doc, cfg, body_section_index):
     pn = cfg["page_numbers"]
     front_pos = pn.get("front_position", "center")
     body_pos = pn.get("body_position", "center")
     body_odd = pn.get("body_odd_position", "right")
     body_even = pn.get("body_even_position", "left")
-    need_alternate = body_pos == "alternate"
-    hf_diff_oe = cfg.get("header_footer", {}).get("different_odd_even", False) and \
-                 cfg.get("header_footer", {}).get("enabled", False)
-    need_even_odd = need_alternate or hf_diff_oe
+    need_alternate, need_even_odd = _resolve_even_odd(cfg, body_pos)
 
     for idx, section in enumerate(doc.sections):
         if idx < body_section_index:
@@ -353,32 +343,8 @@ def _apply_page_numbers_to_sections(doc, cfg, body_section_index):
     for idx, section in enumerate(doc.sections):
         is_body = idx >= body_section_index
         pos = body_pos if is_body else front_pos
-
-        footer = section.footer
-        footer.is_linked_to_previous = False
-        for p in footer.paragraphs:
-            p.clear()
-
-        if pos == "alternate" and is_body:
-            fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-            add_page_number_field(fp, cfg, align=body_odd)
-            even_footer = section.even_page_footer
-            even_footer.is_linked_to_previous = False
-            for p in even_footer.paragraphs:
-                p.clear()
-            ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
-            add_page_number_field(ep, cfg, align=body_even)
-        else:
-            actual_pos = pos if pos != "alternate" else "center"
-            fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-            add_page_number_field(fp, cfg, align=actual_pos)
-            if need_even_odd:
-                even_footer = section.even_page_footer
-                even_footer.is_linked_to_previous = False
-                for p in even_footer.paragraphs:
-                    p.clear()
-                ep = even_footer.paragraphs[0] if even_footer.paragraphs else even_footer.add_paragraph()
-                add_page_number_field(ep, cfg, align=actual_pos)
+        _setup_section_footer_pn(section, cfg, pos, need_alternate if is_body else False,
+                                  need_even_odd, body_odd, body_even)
 
     _finalize_cover_section_page_numbers(
         doc,

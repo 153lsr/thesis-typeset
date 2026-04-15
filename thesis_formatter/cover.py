@@ -1,6 +1,7 @@
 import copy
 import os
 import re
+import sys
 
 from thesis_config import resolve_logo_path
 from ._common import parse_length, get_paragraph_heading_level
@@ -97,8 +98,8 @@ def insert_custom_cover_via_compose(target_doc_path, cover_path, output_path):
 
 
 def _has_cover(doc, cfg, scan_limit=30):
-    cover_title = cfg["cover"].get("title_text", "\u6bd5\u4e1a\u8bba\u6587")
-    keywords = ["\u6bd5\u4e1a\u8bba\u6587", "\u6bd5\u4e1a\u8bbe\u8ba1"]
+    cover_title = cfg["cover"].get("title_text", "毕业论文")
+    keywords = ["毕业论文", "毕业设计"]
     if cover_title:
         keywords.append(cover_title.replace(" ", ""))
     for para in doc.paragraphs[:scan_limit]:
@@ -157,49 +158,39 @@ def find_existing_cover_end(doc, cfg, scan_limit=80):
     return limit
 
 def insert_custom_cover(doc, cover_path, use_word_com=True):
-    """
-    插入自定义封面。
-
-    Args:
-        doc: python-docx Document 对象（仅当回退到 XML 复制时使用）
-        cover_path: 封面文档路径
-        use_word_com: 是否优先使用 Word 方法（保留完整格式）
-                      True = 优先尝试 VBS → 回退 XML
-                      False = 直接使用 XML 手动复制
-    """
     if use_word_com:
+        import tempfile
+
+        temp_target = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        temp_output = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        temp_target.close()
+        temp_output.close()
+        temp_target_name = temp_target.name
+        temp_output_name = temp_output.name
+
         try:
-            import tempfile
+            doc.save(temp_target_name)
 
-            temp_target = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
-            temp_output = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
-            temp_target.close()
-
-            doc.save(temp_target.name)
-
-            # 使用 VBS 方法（不需要 pywin32）
             success = insert_custom_cover_via_vbs(
-                temp_target.name, cover_path, temp_output.name
+                temp_target_name, cover_path, temp_output_name
             )
 
             if success:
                 from docx import Document as Doc
-                merged_doc = Doc(temp_output.name)
+                merged_doc = Doc(temp_output_name)
 
                 doc.element.body.clear()
                 for el in merged_doc.element.body:
                     doc.element.body.append(copy.deepcopy(el))
-
-                os.unlink(temp_target.name)
-                os.unlink(temp_output.name)
                 return
         except Exception as e:
             print(f"Word 方法失败，回退到 XML 手动复制: {e}")
-            try:
-                os.unlink(temp_target.name)
-                os.unlink(temp_output.name)
-            except:
-                pass
+        finally:
+            for path in (temp_target_name, temp_output_name):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
     # 回退方案：使用 python-docx XML 手动复制
     cover_doc = Document(cover_path)
@@ -225,8 +216,8 @@ def insert_custom_cover(doc, cover_path, use_word_com=True):
                 main_num_part.element.append(copy.deepcopy(anum))
             for num in cover_num_part.element.findall("w:num", ns):
                 main_num_part.element.append(copy.deepcopy(num))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 编号部件合并失败，已跳过: {e}", file=sys.stderr)
 
     ns_a = "http://schemas.openxmlformats.org/drawingml/2006/main"
     ns_r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -257,8 +248,8 @@ def insert_custom_cover(doc, cover_path, use_word_com=True):
                     rel.reltype, rel.target_ref
                 )
                 rid_map[rel.rId] = new_rId
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[警告] 封面资源引用合并失败，已跳过: {e}", file=sys.stderr)
 
     _strip_tags = {
         qn("w:commentRangeStart"), qn("w:commentRangeEnd"),
@@ -302,7 +293,7 @@ def insert_cover_and_declaration(doc, cfg, config_path=None, skip_cover=False):
     cover = cfg["cover"]
     latin = cfg["fonts"]["latin"]
 
-    def mk_run(text, ea="\u5b8b\u4f53", sz_hp=None, bold=False, uline=False):
+    def mk_run(text, ea="宋体", sz_hp=None, bold=False, uline=False):
         r = OxmlElement("w:r")
         rPr = OxmlElement("w:rPr")
         rf = OxmlElement("w:rFonts")

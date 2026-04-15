@@ -2,14 +2,14 @@ import copy
 import re
 
 from ._titles import _get_special_title_map
-from ._common import get_paragraph_heading_level, is_heading_style
+from ._common import get_paragraph_heading_level, is_heading_style, make_field_runs
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 
-_CITE_NUM_RE = re.compile(r'\[(\d+(?:\s*[,\uff0c\-\u2013]\s*\d+)*)\]')
-_CITE_AY_OUTER = re.compile(r'[\uff08(](.+?)[\uff09)]')
-_CITE_AY_INNER = re.compile(r'(.+?)[,\uff0c]\s*((?:19|20)\d{2}[a-z]?)\s*$')
+_CITE_NUM_RE = re.compile(r'\[(\d+(?:\s*[,，\-–]\s*\d+)*)\]')
+_CITE_AY_OUTER = re.compile(r'[（(](.+?)[）)]')
+_CITE_AY_INNER = re.compile(r'(.+?)[,，]\s*((?:19|20)\d{2}[a-z]?)\s*$')
 _REF_NUM_RE = re.compile(r'^\[(\d+)\]\s*')
 _REF_TYPE_RE = re.compile(r'\[([A-Z]{1,2}(?:/[A-Z]{1,2})?)\]')
 _REF_YEAR_RE = re.compile(r'(?:19|20)\d{2}[a-z]?')
@@ -21,9 +21,9 @@ _GBT_VALID_TYPES = {
 
 def _parse_cite_numbers(inner):
     nums = []
-    for part in re.split(r'[,\uff0c]', inner):
+    for part in re.split(r'[,，]', inner):
         part = part.strip()
-        rm = re.match(r'(\d+)\s*[-\u2013]\s*(\d+)', part)
+        rm = re.match(r'(\d+)\s*[-–]\s*(\d+)', part)
         if rm:
             nums.extend(range(int(rm.group(1)), int(rm.group(2)) + 1))
         elif re.match(r'\d+$', part):
@@ -33,7 +33,7 @@ def _parse_cite_numbers(inner):
 
 def _extract_primary_author(author_str):
     return re.split(
-        r'\u7b49|[\u548c\u4e0e&,\uff0c]|\s+and\s+|\s+et\s+al', author_str, maxsplit=1
+        r'等|[和与&,，]|\s+and\s+|\s+et\s+al', author_str, maxsplit=1
     )[0].strip()
 
 
@@ -42,22 +42,22 @@ def check_citations(doc, cfg):
     sec = cfg.get("sections", {})
     st_map = _get_special_title_map(cfg)
 
-    ref_key = "\u53c2\u8003\u6587\u732e"
-    if "\u53c2\u8003\u6587\u732e" in st_map:
-        ref_key = st_map["\u53c2\u8003\u6587\u732e"]["match"]
-    ref_key_norm = ref_key.replace(" ", "").replace("\u3000", "")
+    ref_key = "参考文献"
+    if "参考文献" in st_map:
+        ref_key = st_map["参考文献"]["match"]
+    ref_key_norm = ref_key.replace(" ", "").replace("　", "")
 
-    chap_pat = re.compile(sec.get("chapter_pattern", r"^\u7b2c\s*\d+\s*\u7ae0"))
+    chap_pat = re.compile(sec.get("chapter_pattern", r"^第\s*\d+\s*章"))
 
     paras = doc.paragraphs
     ref_start = ref_end = body_start = None
 
     _boundary_norms = set()
     for st in sec.get("special_titles", []):
-        n = st["match"].replace(" ", "").replace("\u3000", "")
+        n = st["match"].replace(" ", "").replace("　", "")
         if n != ref_key_norm:
             _boundary_norms.add(n)
-    _ap = sec.get("appendix_pattern", r"^\u9644\u5f55\s*[A-Z]?")
+    _ap = sec.get("appendix_pattern", r"^附录\s*[A-Z]?")
     if _ap.endswith("[A-Z]"):
         _ap += "?"
     appendix_re = re.compile(_ap)
@@ -65,7 +65,7 @@ def check_citations(doc, cfg):
     for i, p in enumerate(paras):
         level = get_paragraph_heading_level(p)
         t_strip = p.text.strip()
-        t_norm = t_strip.replace(" ", "").replace("\u3000", "")
+        t_norm = t_strip.replace(" ", "").replace("　", "")
 
         if level == 1 and body_start is None and chap_pat.match(t_strip):
             body_start = i
@@ -88,7 +88,7 @@ def check_citations(doc, cfg):
         p = paras[i]
         level = get_paragraph_heading_level(p)
         t = p.text.strip()
-        t_norm = t.replace(" ", "").replace("\u3000", "")
+        t_norm = t.replace(" ", "").replace("　", "")
 
         if level is not None:
             break
@@ -111,7 +111,7 @@ def check_citations(doc, cfg):
 
         am = re.match(r'(.+?(?:\.[A-Z]\.)*)\.\s*(?=[^A-Z])', t_body)
         if not am:
-            am = re.match(r'(.+?)\uff0e', t_body)
+            am = re.match(r'(.+?)．', t_body)
         entry["authors"] = am.group(1).strip() if am else t_body[:30].strip()
 
         ref_entries.append(entry)
@@ -128,8 +128,10 @@ def check_citations(doc, cfg):
         level = get_paragraph_heading_level(p)
         t_strip = p.text.strip()
 
-        if level == 1:
-            in_appendix = bool(appendix_re.match(t_strip))
+        if level is not None and appendix_re.match(t_strip):
+            in_appendix = True
+        elif level is not None:
+            in_appendix = False
         if level is not None or in_appendix:
             continue
         if not t_strip:
@@ -141,12 +143,12 @@ def check_citations(doc, cfg):
 
         for m in _CITE_AY_OUTER.finditer(t_strip):
             inner = m.group(1)
-            for seg in re.split(r'[;\uff1b]', inner):
+            for seg in re.split(r'[;；]', inner):
                 seg = seg.strip()
                 am = _CITE_AY_INNER.match(seg)
                 if am:
                     author = am.group(1).strip()
-                    if re.fullmatch(r'[\d\s\-\u2013\u2014\u5e74]+', author):
+                    if re.fullmatch(r'[\d\s\-–—年]+', author):
                         continue
                     ay_cites.append((author, am.group(2).strip(), i))
 
@@ -161,11 +163,11 @@ def check_citations(doc, cfg):
             if nums_list != expected:
                 gaps = sorted(set(expected) - set(nums_list))
                 if gaps:
-                    warnings.append(f"\u53c2\u8003\u6587\u732e\u7f16\u53f7\u4e0d\u8fde\u7eed\uff0c\u7f3a\u5c11: {gaps}")
+                    warnings.append(f"参考文献编号不连续，缺少: {gaps}")
             seen = set()
             for n in nums_list:
                 if n in seen:
-                    warnings.append(f"\u53c2\u8003\u6587\u732e\u7f16\u53f7\u91cd\u590d: [{n}]")
+                    warnings.append(f"参考文献编号重复: [{n}]")
                 seen.add(n)
 
         first_seen = []
@@ -175,8 +177,8 @@ def check_citations(doc, cfg):
         if first_seen and first_seen != sorted(first_seen):
             preview = first_seen[:15]
             warnings.append(
-                f"\u6b63\u6587\u5f15\u7528\u7f16\u53f7\u672a\u6309\u9996\u6b21\u51fa\u73b0\u987a\u5e8f\u6392\u5217"
-                f"\uff08\u524d{len(preview)}\u4e2a: {preview}\uff09"
+                f"正文引用编号未按首次出现顺序排列"
+                f"（前{len(preview)}个: {preview}）"
             )
 
         cited_set = {n for n, _ in num_cites}
@@ -184,9 +186,9 @@ def check_citations(doc, cfg):
         diff_cite = sorted(cited_set - ref_set)
         diff_ref = sorted(ref_set - cited_set)
         if diff_cite:
-            warnings.append(f"\u6b63\u6587\u5f15\u7528\u4e86\u4f46\u6587\u672b\u65e0\u5bf9\u5e94\u6761\u76ee: {diff_cite}")
+            warnings.append(f"正文引用了但文末无对应条目: {diff_cite}")
         if diff_ref:
-            warnings.append(f"\u6587\u672b\u6709\u6761\u76ee\u4f46\u6b63\u6587\u672a\u5f15\u7528: {diff_ref}")
+            warnings.append(f"文末有条目但正文未引用: {diff_ref}")
 
     else:
         unmatched = []
@@ -198,12 +200,12 @@ def check_citations(doc, cfg):
                 for e in ref_entries
             )
             if not found:
-                tag = f"\uff08{author_str}\uff0c{year_str}\uff09"
+                tag = f"（{author_str}，{year_str}）"
                 if tag not in unmatched:
                     unmatched.append(tag)
         if unmatched:
             warnings.append(
-                f"\u6b63\u6587\u5f15\u7528\u4e86\u4f46\u6587\u672b\u65e0\u5339\u914d\u6761\u76ee: {', '.join(unmatched[:15])}"
+                f"正文引用了但文末无匹配条目: {', '.join(unmatched[:15])}"
             )
 
         ref_ay = set()
@@ -216,15 +218,15 @@ def check_citations(doc, cfg):
         uncited = ref_ay - cited_ay
         if uncited:
             tags = [f"{a}({y})" for a, y in sorted(uncited)]
-            warnings.append(f"\u6587\u672b\u6709\u6761\u76ee\u4f46\u6b63\u6587\u672a\u5f15\u7528: {', '.join(tags[:15])}")
+            warnings.append(f"文末有条目但正文未引用: {', '.join(tags[:15])}")
 
     for e in ref_entries:
         if e["type"] is None:
-            warnings.append(f'\u53c2\u8003\u6587\u732e\u7f3a\u5c11\u7c7b\u578b\u6807\u8bc6[J]/[M]/..: "{e["text"][:50]}"')
+            warnings.append(f'参考文献缺少类型标识[J]/[M]/..: "{e["text"][:50]}"')
         elif e["type"] not in _GBT_VALID_TYPES:
-            warnings.append(f'\u53c2\u8003\u6587\u732e\u7c7b\u578b\u6807\u8bc6\u4e0d\u89c4\u8303[{e["type"]}]: "{e["text"][:50]}"')
+            warnings.append(f'参考文献类型标识不规范[{e["type"]}]: "{e["text"][:50]}"')
         if not e["year"]:
-            warnings.append(f'\u53c2\u8003\u6587\u732e\u7f3a\u5c11\u5e74\u4efd: "{e["text"][:50]}"')
+            warnings.append(f'参考文献缺少年份: "{e["text"][:50]}"')
 
     return warnings
 
@@ -240,39 +242,15 @@ def _make_text_run_el(text, rPr_el=None):
     return r
 
 
-def _make_field_runs(instr, display, rPr_el=None):
-    els = []
-    for ftype in ('begin', None, 'separate', None, 'end'):
-        r = OxmlElement('w:r')
-        if rPr_el is not None:
-            r.append(copy.deepcopy(rPr_el))
-        if ftype in ('begin', 'separate', 'end'):
-            fc = OxmlElement('w:fldChar')
-            fc.set(qn('w:fldCharType'), ftype)
-            r.append(fc)
-        elif len(els) == 1:
-            it = OxmlElement('w:instrText')
-            it.set(qn('xml:space'), 'preserve')
-            it.text = f' {instr} '
-            r.append(it)
-        else:
-            t = OxmlElement('w:t')
-            t.set(qn('xml:space'), 'preserve')
-            t.text = display
-            r.append(t)
-        els.append(r)
-    return els
-
-
 def _parse_cite_structure(inner):
     parts = []
-    for seg in re.split(r'([,\uff0c])', inner):
+    for seg in re.split(r'([,，])', inner):
         seg = seg.strip()
-        if seg in (',', '\uff0c'):
+        if seg in (',', '，'):
             if parts:
                 parts.append(('sep', ','))
             continue
-        rm = re.match(r'(\d+)\s*[-\u2013]\s*(\d+)', seg)
+        rm = re.match(r'(\d+)\s*[-–]\s*(\d+)', seg)
         if rm:
             parts.append(('range', (int(rm.group(1)), int(rm.group(2)))))
         elif re.match(r'\d+$', seg):
@@ -301,19 +279,19 @@ def apply_ref_crosslinks(doc, cfg):
     sec = cfg.get("sections", {})
     st_map = _get_special_title_map(cfg)
 
-    ref_key_norm = "\u53c2\u8003\u6587\u732e"
-    if "\u53c2\u8003\u6587\u732e" in st_map:
-        ref_key_norm = st_map["\u53c2\u8003\u6587\u732e"]["match"].replace(" ", "").replace("\u3000", "")
+    ref_key_norm = "参考文献"
+    if "参考文献" in st_map:
+        ref_key_norm = st_map["参考文献"]["match"].replace(" ", "").replace("　", "")
 
-    chap_pat = re.compile(sec.get("chapter_pattern", r"^\u7b2c\s*\d+\s*\u7ae0"))
-    _ap = sec.get("appendix_pattern", r"^\u9644\u5f55\s*[A-Z]?")
+    chap_pat = re.compile(sec.get("chapter_pattern", r"^第\s*\d+\s*章"))
+    _ap = sec.get("appendix_pattern", r"^附录\s*[A-Z]?")
     if _ap.endswith("[A-Z]"):
         _ap += "?"
     appendix_re = re.compile(_ap)
 
     _boundary_norms = set()
     for st in sec.get("special_titles", []):
-        n = st["match"].replace(" ", "").replace("\u3000", "")
+        n = st["match"].replace(" ", "").replace("　", "")
         if n != ref_key_norm:
             _boundary_norms.add(n)
 
@@ -323,7 +301,7 @@ def apply_ref_crosslinks(doc, cfg):
     for i, p in enumerate(paras):
         level = get_paragraph_heading_level(p)
         t_strip = p.text.strip()
-        t_norm = t_strip.replace(" ", "").replace("\u3000", "")
+        t_norm = t_strip.replace(" ", "").replace("　", "")
         if level == 1 and body_start is None and chap_pat.match(t_strip):
             body_start = i
         if level == 1 and t_norm == ref_key_norm:
@@ -346,7 +324,7 @@ def apply_ref_crosslinks(doc, cfg):
         num_count += len(_CITE_NUM_RE.findall(t))
         for m in _CITE_AY_OUTER.finditer(t):
             inner = m.group(1)
-            for seg in re.split(r'[;\uff1b]', inner):
+            for seg in re.split(r'[;；]', inner):
                 if _CITE_AY_INNER.match(seg.strip()):
                     ay_count += 1
     is_numbered = not (ay_count > 0 and num_count == 0 and ay_count > num_count)
@@ -360,7 +338,7 @@ def apply_ref_crosslinks(doc, cfg):
         t = p.text.strip()
         if level is not None:
             break
-        t_norm = t.replace(" ", "").replace("\u3000", "")
+        t_norm = t.replace(" ", "").replace("　", "")
         if t_norm in _boundary_norms or appendix_re.match(t):
             break
         if not t:
@@ -395,7 +373,7 @@ def apply_ref_crosslinks(doc, cfg):
         bm_start.set(qn('w:id'), str(bm_id))
         bm_start.set(qn('w:name'), bm_name)
         p_el.append(bm_start)
-        for fel in _make_field_runs('SEQ Ref', str(num), rPr0):
+        for fel in make_field_runs('SEQ Ref', str(num), rPr0):
             p_el.append(fel)
         bm_end = OxmlElement('w:bookmarkEnd')
         bm_end.set(qn('w:id'), str(bm_id))
@@ -415,8 +393,10 @@ def apply_ref_crosslinks(doc, cfg):
         p = paras[i]
         level = get_paragraph_heading_level(p)
         t_strip = p.text.strip()
-        if level == 1:
-            in_appendix = bool(appendix_re.match(t_strip))
+        if level is not None and appendix_re.match(t_strip):
+            in_appendix = True
+        elif level is not None:
+            in_appendix = False
         if level is not None or in_appendix or not t_strip:
             continue
 
@@ -475,15 +455,15 @@ def apply_ref_crosslinks(doc, cfg):
                         p_el.append(_make_text_run_el(',', cite_rPr))
                     elif pt[0] == 'num':
                         bm = bookmark_map[pt[1]]
-                        for fel in _make_field_runs(f'REF {bm} \\h', str(pt[1]), cite_rPr):
+                        for fel in make_field_runs(f'REF {bm} \\h', str(pt[1]), cite_rPr):
                             p_el.append(fel)
                     elif pt[0] == 'range':
                         bm_s = bookmark_map[pt[1][0]]
                         bm_e = bookmark_map[pt[1][1]]
-                        for fel in _make_field_runs(f'REF {bm_s} \\h', str(pt[1][0]), cite_rPr):
+                        for fel in make_field_runs(f'REF {bm_s} \\h', str(pt[1][0]), cite_rPr):
                             p_el.append(fel)
                         p_el.append(_make_text_run_el('-', cite_rPr))
-                        for fel in _make_field_runs(f'REF {bm_e} \\h', str(pt[1][1]), cite_rPr):
+                        for fel in make_field_runs(f'REF {bm_e} \\h', str(pt[1][1]), cite_rPr):
                             p_el.append(fel)
                 p_el.append(_make_text_run_el(']', cite_rPr))
             else:

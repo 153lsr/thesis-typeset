@@ -73,7 +73,7 @@ def _resolve_postprocess_mode(config):
     if local_mode == "page_numbers":
         return "none"
     if local_mode == "header_footer":
-        return "fields_only" if _header_uses_chapter_title_fields(config) else "none"
+        return "fields_only"
 
     if runtime.get("cover_only") or config.get("cover", {}).get("only_insert", False):
         return "none"
@@ -82,7 +82,7 @@ def _resolve_postprocess_mode(config):
     if config.get("page_numbers", {}).get("only_insert", False):
         return "none"
     if config.get("header_footer", {}).get("only_insert", False):
-        return "fields_only" if _header_uses_chapter_title_fields(config) else "none"
+        return "fields_only"
     return "full"
 
 def run_format(input_path, output_path, log,

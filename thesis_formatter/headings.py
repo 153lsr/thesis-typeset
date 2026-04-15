@@ -4,6 +4,7 @@ from ._common import (
     is_heading, get_paragraph_heading_level, get_heading_style,
     _ALIGN_MAP, set_para_runs_font, set_run_font,
     _ALL_HEADING_NAMES, _HEADING_STYLE_IDS,
+    matches_chapter_heading, match_chapter_heading, normalize_title,
 )
 from ._titles import _find_special_display, _get_special_title_map
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -13,27 +14,17 @@ from docx.shared import Pt
 
 
 _CN_NUMERALS = "零一二三四五六七八九十"
-_AR_CHAPTER_PATTERN = r"^第\s*\d+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
-_CN_CHAPTER_PATTERN = r"^第\s*[一二三四五六七八九十百千零两〇]+\s*章(?:\s|(?=[\u4e00-\u9fff])|$)"
 
 
-def _chapter_patterns(cfg, text_first=False):
+def _compile_section_patterns(cfg):
+    """Compile heading-level regex patterns from config, used by multiple functions."""
     sec = cfg.get("sections", {})
-    configured = sec.get("chapter_pattern", _AR_CHAPTER_PATTERN)
-    ordered = [_CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN, configured] if text_first else [configured, _CN_CHAPTER_PATTERN, _AR_CHAPTER_PATTERN]
-    seen = set()
-    for pat in ordered:
-        if pat and pat not in seen:
-            seen.add(pat)
-            yield pat
-
-
-def _match_chapter_heading(text, cfg, text_first=False):
-    for pat in _chapter_patterns(cfg, text_first=text_first):
-        m = re.match(pat, text)
-        if m:
-            return m
-    return None
+    return (
+        re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]")),
+        re.compile(sec.get("h2_pattern", r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))")),
+        re.compile(sec.get("h3_pattern", r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))")),
+        re.compile(sec.get("h4_pattern", r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))")),
+    )
 
 
 def _int_to_cn(n):
@@ -46,7 +37,7 @@ def _int_to_cn(n):
            (_CN_NUMERALS[ones] if ones else "")
 
 
-def _renumber_h1_text(text, new_num, pattern):
+def _renumber_h1_text(text, new_num):
     if re.search(r"第\s*(?:\d+|[一二三四五六七八九十百千零两〇]+)\s*章", text):
         return re.sub(r"(第\s*)(?:\d+|[一二三四五六七八九十百千零两〇]+)(\s*章)", fr"\g<1>{new_num}\2", text, count=1)
     if re.search(r"(?i)Chapter\s+\d+", text):
@@ -103,10 +94,7 @@ def renumber_headings(doc, cfg, skip_para_ids=None):
     skip_para_ids = set(skip_para_ids or ())
     sec = cfg.get("sections", {})
     text_first = bool(cfg.get("toc", {}).get("only_insert", False))
-    appendix_pat = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
-    h2_pat = re.compile(sec.get("h2_pattern", r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h3_pat = re.compile(sec.get("h3_pattern", r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h4_pat = re.compile(sec.get("h4_pattern", r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
+    appendix_pat, h2_pat, h3_pat, h4_pat = _compile_section_patterns(cfg)
 
     st_map = _get_special_title_map(cfg)
     special_set = set(st_map.keys())
@@ -135,11 +123,11 @@ def renumber_headings(doc, cfg, skip_para_ids=None):
                 continue
             if in_appendix:
                 continue
-            chapter_match = _match_chapter_heading(t, cfg, text_first=text_first)
+            chapter_match = match_chapter_heading(t, cfg, text_first=text_first)
             if chapter_match:
                 chap_n += 1
                 h2_n = h3_n = h4_n = 0
-                new_t = _renumber_h1_text(t, chap_n, chapter_match.re.pattern)
+                new_t = _renumber_h1_text(t, chap_n)
                 if new_t != t:
                     changes.append(f'  H1: "{t}" → "{new_t}"')
                     _replace_para_text(para, new_t)
@@ -173,8 +161,11 @@ def renumber_headings(doc, cfg, skip_para_ids=None):
 
 def normalize_heading_spacing(doc, cfg, skip_para_ids=None):
     skip_para_ids = set(skip_para_ids or ())
+    sec = cfg.get("sections", {})
     text_first = bool(cfg.get("toc", {}).get("only_insert", False))
     st_map = _get_special_title_map(cfg)
+    special_h1_set = set(st_map.keys())
+    special_h1_set.update(s.replace(" ", "").replace("\u3000", "") for s in sec.get("special_h1", []))
     JIJU = "  "
 
     for para in doc.paragraphs:
@@ -185,12 +176,12 @@ def normalize_heading_spacing(doc, cfg, skip_para_ids=None):
         if not t:
             continue
         t_nospace = t.replace(" ", "").replace("\u3000", "")
-        chapter_match = _match_chapter_heading(t, cfg, text_first=text_first)
+        chapter_match = match_chapter_heading(t, cfg, text_first=text_first)
         effective_level = level if level is not None else _infer_heading_level_from_text(t, cfg, text_first=text_first, para=para)
 
         new_t = None
         if effective_level == 1:
-            if t_nospace in st_map:
+            if t_nospace in special_h1_set:
                 continue
             if chapter_match:
                 suffix = t[chapter_match.end():].lstrip()
@@ -278,8 +269,49 @@ def _clear_paragraph_outline_level(para):
         ppr.remove(outline)
 
 
-def _normalize_title_text(text):
-    return text.replace(" ", "").replace("\u3000", "")
+def _set_paragraph_outline_level(para, level):
+    ppr = para._element.get_or_add_pPr()
+    outline = ppr.find(qn("w:outlineLvl"))
+    if outline is None:
+        outline = OxmlElement("w:outlineLvl")
+        ppr.append(outline)
+    outline.set(qn("w:val"), str(level))
+
+
+def assign_outline_levels_for_toc(doc, cfg):
+    """Set outline levels for TOC generation without changing paragraph styles or text."""
+    toc_cfg = cfg.get("toc", {})
+    exclude_abstract = toc_cfg.get("exclude_abstract_headings", True)
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+
+        level = get_paragraph_heading_level(para)
+        has_heading_style = level is not None
+
+        if level is None:
+            level = _infer_heading_level_from_text(text, cfg, text_first=True, para=para)
+
+        if level is None:
+            continue
+
+        excluded = False
+        if exclude_abstract and _is_abstract_heading(text, cfg):
+            excluded = True
+        if not excluded:
+            t_nospace = text.replace(" ", "").replace("\u3000", "")
+            for st in cfg.get("special_titles", []):
+                match_text = st.get("match", "").replace(" ", "").replace("\u3000", "")
+                if match_text == t_nospace and st.get("toc_exclude", False):
+                    excluded = True
+                    break
+
+        if excluded:
+            _set_paragraph_outline_level(para, 9)
+        elif not has_heading_style:
+            _set_paragraph_outline_level(para, level - 1)
 
 
 def _layout_allows_heading_level(para, level):
@@ -292,14 +324,10 @@ def _layout_allows_heading_level(para, level):
 
 
 def _infer_heading_level_from_text(text, cfg, text_first=False, para=None):
-    sec = cfg.get("sections", {})
-    appendix_re = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
-    h2_re = re.compile(sec.get("h2_pattern", r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h3_re = re.compile(sec.get("h3_pattern", r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h4_re = re.compile(sec.get("h4_pattern", r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
+    appendix_re, h2_re, h3_re, h4_re = _compile_section_patterns(cfg)
 
     candidate = None
-    if _match_chapter_heading(text, cfg, text_first=text_first):
+    if match_chapter_heading(text, cfg, text_first=text_first):
         candidate = 1
     elif appendix_re.match(text):
         candidate = 1
@@ -381,7 +409,10 @@ def _materialize_paragraph_look(para):
     style_bold = style_font.bold
     style_italic = style_font.italic
     style_underline = style_font.underline
-    style_color = style_font.color.rgb
+    try:
+        style_color = style_font.color.rgb
+    except Exception:
+        style_color = None
 
     for run in para.runs:
         font = run.font
@@ -392,7 +423,10 @@ def _materialize_paragraph_look(para):
         bold = style_bold if font.bold is None else font.bold
         italic = style_italic if font.italic is None else font.italic
         underline = style_underline if font.underline is None else font.underline
-        color = font.color.rgb or style_color
+        try:
+            color = font.color.rgb or style_color
+        except Exception:
+            color = style_color
 
         if latin is not None:
             font.name = latin
@@ -425,11 +459,11 @@ def _resolve_demote_target_style(doc):
 
 
 def _is_abstract_heading(text, cfg):
-    normalized = _normalize_title_text(text)
+    normalized = normalize_title(text)
     cn_titles = {
-        _normalize_title_text("摘要"),
-        _normalize_title_text(_find_special_display(cfg, "摘要", raw=True)),
-        _normalize_title_text(_find_special_display(cfg, "摘要")),
+        normalize_title("摘要"),
+        normalize_title(_find_special_display(cfg, "摘要", raw=True)),
+        normalize_title(_find_special_display(cfg, "摘要")),
     }
     return normalized in cn_titles or normalized.lower() == "abstract"
 
@@ -459,22 +493,19 @@ def _is_caption_like_heading(text, cfg):
 
 
 def _matches_structured_heading(level, text, cfg):
-    sec = cfg.get("sections", {})
     text_first = bool(cfg.get("toc", {}).get("only_insert", False))
-    appendix_re = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
-    h2_re = re.compile(sec.get("h2_pattern", r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h3_re = re.compile(sec.get("h3_pattern", r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h4_re = re.compile(sec.get("h4_pattern", r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
+    sec = cfg.get("sections", {})
+    appendix_re, h2_re, h3_re, h4_re = _compile_section_patterns(cfg)
     st_map = _get_special_title_map(cfg)
     special_h1_set = set(st_map.keys())
     special_h1_set.update(s.replace(" ", "").replace("\u3000", "") for s in sec.get("special_h1", []))
 
-    normalized = _normalize_title_text(text)
+    normalized = normalize_title(text)
     if level == 1:
         if normalized in special_h1_set:
             return True
         return bool(
-            _match_chapter_heading(text, cfg, text_first=text_first)
+            match_chapter_heading(text, cfg, text_first=text_first)
             or appendix_re.match(text)
             or re.match(r"(?i)^Chapter\s+\d+\b", text)
             or re.match(r"^[一二三四五六七八九十百]+、", text)
@@ -566,7 +597,7 @@ def _looks_like_auto_heading_text(text, level):
     text = (text or "").strip()
     if not text:
         return False
-    if len(text) > 50:
+    if len(text) > 80:
         return False
     if text[-1] in _SENTENCE_ENDINGS:
         return False
@@ -578,10 +609,7 @@ def auto_assign_heading_styles(doc, cfg, skip_para_ids=None, preserve_look=False
     skip_para_ids = set(skip_para_ids or ())
     sec = cfg.get("sections", {})
     text_first = bool(cfg.get("toc", {}).get("only_insert", False))
-    appendix_re = re.compile(sec.get("appendix_pattern", r"^附录\s*[A-Z]"))
-    h2_re = re.compile(sec.get("h2_pattern", r"^\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h3_re = re.compile(sec.get("h3_pattern", r"^\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
-    h4_re = re.compile(sec.get("h4_pattern", r"^\d+\.\d+\.\d+\.\d+(\s|(?=[\u4e00-\u9fff]))"))
+    appendix_re, h2_re, h3_re, h4_re = _compile_section_patterns(cfg)
 
     st_map = _get_special_title_map(cfg)
     special_h1_set = set()
@@ -612,7 +640,7 @@ def auto_assign_heading_styles(doc, cfg, skip_para_ids=None, preserve_look=False
 
         if t_nospace in special_h1_set:
             target_level = 1
-        elif _match_chapter_heading(t, cfg, text_first=text_first):
+        elif match_chapter_heading(t, cfg, text_first=text_first):
             target_level = 1
         elif appendix_re.match(t):
             target_level = 1

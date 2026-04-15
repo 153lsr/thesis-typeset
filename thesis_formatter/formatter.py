@@ -33,46 +33,62 @@ from .structure import validate_structure
 
 
 def _build_insert_cover_vbs():
+    # 以原文件为基础，用剪贴板粘贴封面（PasteAndFormat 保留源格式），再加分节符。
     return """Option Explicit
-Const wdCollapseEnd = 0
-Const wdSectionBreakNextPage = 2
-Const wdFormatXMLDocument = 12
-Dim objWord, mergedDoc, args, targetPath, coverPath, tempBodyPath, fso
+Const wdStory = 6
+Const wdSectionBreakNextPage = 7
+Const wdFormatOriginalFormatting = 16
+Dim objWord, targetDoc, coverDoc, args, targetPath, coverPath
 Set args = WScript.Arguments
 If args.Count < 2 Then WScript.Quit 1
 targetPath = args(0): coverPath = args(1)
-tempBodyPath = targetPath & ".body.tmp.docx"
-Set fso = CreateObject("Scripting.FileSystemObject")
+
 On Error Resume Next
-If fso.FileExists(tempBodyPath) Then fso.DeleteFile tempBodyPath, True
-fso.CopyFile targetPath, tempBodyPath, True
-If Err.Number <> 0 Then WScript.Quit 1
-Err.Clear
 Set objWord = CreateObject("Word.Application")
 If Err.Number <> 0 Then WScript.Quit 1
 On Error GoTo 0
+
 objWord.Visible = False: objWord.DisplayAlerts = 0
-Set mergedDoc = objWord.Documents.Open(coverPath)
+
+' 1. Open cover, copy all content to clipboard
+On Error Resume Next
+Set coverDoc = objWord.Documents.Open(coverPath)
 If Err.Number <> 0 Then
     objWord.Quit
     WScript.Quit 1
 End If
 On Error GoTo 0
-mergedDoc.SaveAs2 targetPath, wdFormatXMLDocument
-mergedDoc.Range(mergedDoc.Content.End - 1, mergedDoc.Content.End - 1).Select
+coverDoc.Content.Copy
+coverDoc.Close False
+
+' 2. Open target, paste cover at start with original formatting
+On Error Resume Next
+Set targetDoc = objWord.Documents.Open(targetPath)
+If Err.Number <> 0 Then
+    objWord.Quit
+    WScript.Quit 1
+End If
+On Error GoTo 0
+
+objWord.Selection.HomeKey wdStory
+objWord.Selection.PasteAndFormat wdFormatOriginalFormatting
+
+' 3. After paste, Selection is at end of cover content - insert section break
 objWord.Selection.InsertBreak wdSectionBreakNextPage
-objWord.Selection.Collapse wdCollapseEnd
-objWord.Selection.InsertFile tempBodyPath
-If mergedDoc.Sections.Count >= 1 Then
-    ClearSectionHeaderFooter mergedDoc.Sections(1)
+
+' 4. Clear cover section headers/footers
+ClearSectionHeaderFooter targetDoc.Sections(1)
+If targetDoc.Sections.Count >= 2 Then
+    UnlinkSectionHeaderFooter targetDoc.Sections(2)
 End If
-If mergedDoc.Sections.Count >= 2 Then
-    UnlinkSectionHeaderFooter mergedDoc.Sections(2)
-End If
-mergedDoc.Save
-mergedDoc.Close False
-If fso.FileExists(tempBodyPath) Then fso.DeleteFile tempBodyPath, True
+
+targetDoc.Save
+targetDoc.Close False
 objWord.Quit
+
+Set targetDoc = Nothing
+Set coverDoc = Nothing
+Set objWord = Nothing
 WScript.Echo "Done"
 
 Sub ClearSectionHeaderFooter(section)
@@ -101,12 +117,12 @@ End Sub
 """
 def _insert_cover_via_vbs(target_path, cover_path):
     """使用嵌入的 VBS 代码插入封面，保留完整格式."""
-    import sys
+    import tempfile
 
     vbs_code = _build_insert_cover_vbs()
+    vbs_path = None
 
     try:
-        import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".vbs", delete=False) as f:
             f.write(vbs_code)
             vbs_path = f.name
@@ -116,13 +132,180 @@ def _insert_cover_via_vbs(target_path, cover_path):
             capture_output=True,
             text=True,
             encoding="gbk",
+            errors="replace",
             timeout=60
         )
 
-        os.unlink(vbs_path)
         return result.returncode == 0, result.stderr if result.returncode != 0 else ""
     except Exception as e:
         return False, str(e)
+    finally:
+        if vbs_path:
+            try:
+                os.unlink(vbs_path)
+            except OSError:
+                pass
+
+def _insert_space_at_offset(para, offset):
+    """Insert a single space character at *offset* within the paragraph text,
+    preserving all existing run formatting."""
+    pos = 0
+    for run in para.runs:
+        rt = run.text or ""
+        run_end = pos + len(rt)
+        if pos <= offset < run_end:
+            local = offset - pos
+            run.text = rt[:local] + " " + rt[local:]
+            return
+        pos = run_end
+
+
+def _format_tables(doc, cfg):
+    """Format all tables: cell alignment, fonts, borders (three-line table style)."""
+    latin = cfg["fonts"]["latin"]
+    body_font = cfg["fonts"]["body"]
+    caption_size = parse_length(cfg["sizes"]["caption"])
+    tbl_cfg = cfg["table"]
+    tbl_cell_align = _ALIGN_MAP.get(tbl_cfg.get("cell_align", "center"))
+    for table in doc.tables:
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement('w:tblPr')
+            tbl.insert(0, tblPr)
+        tblW = tblPr.find(qn('w:tblW'))
+        if tblW is None:
+            tblW = OxmlElement('w:tblW')
+            tblPr.append(tblW)
+        tblW.set(qn('w:type'), 'pct')
+        tblW.set(qn('w:w'), '5000')
+        tblLayout = tblPr.find(qn('w:tblLayout'))
+        if tblLayout is None:
+            tblLayout = OxmlElement('w:tblLayout')
+            tblPr.append(tblLayout)
+        tblLayout.set(qn('w:type'), 'autofit')
+
+        rows = len(table.rows)
+        for r_idx, row in enumerate(table.rows):
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    if tbl_cell_align is not None:
+                        p.alignment = tbl_cell_align
+                    apply_paragraph_spacing(p.paragraph_format, "before", 0)
+                    apply_paragraph_spacing(p.paragraph_format, "after", 0)
+                    p.paragraph_format.first_line_indent = parse_length(0)
+                    apply_line_spacing(p.paragraph_format, tbl_cfg["line_spacing"])
+                    set_para_runs_font(p, east_asia=body_font, size_pt=caption_size,
+                                       bold=False, latin=latin)
+
+                clear_table_border(cell, "left")
+                clear_table_border(cell, "right")
+                clear_table_border(cell, "insideV")
+                clear_table_border(cell, "insideH")
+
+                if r_idx == 0:
+                    set_table_border(cell, "top", sz=tbl_cfg["top_border_sz"])
+                    set_table_border(cell, "bottom", sz=tbl_cfg["header_border_sz"])
+                if r_idx == rows - 1:
+                    set_table_border(cell, "bottom", sz=tbl_cfg["bottom_border_sz"])
+
+
+def _format_captions(doc, cfg, preserved_para_ids):
+    """Format figure/table/subfigure/note/source captions and apply keep-with-next."""
+    latin = cfg["fonts"]["latin"]
+    body_font = cfg["fonts"]["body"]
+    caption_size = parse_length(cfg["sizes"]["caption"])
+    note_size = parse_length(cfg["sizes"]["note"])
+    body_ls = cfg["body"]["line_spacing"]
+    spacing_line = parse_length(cfg["sizes"]["body"])
+
+    cap_cfg = cfg.get("captions", {})
+    fig_pat = cap_cfg.get("figure_pattern", r"^图\s*\d")
+    tbl_pat = cap_cfg.get("table_pattern", r"^(续)?表\s*\d")
+    subfig_pat = cap_cfg.get("subfigure_pattern", r"^\([a-z]\)")
+    note_pat = cap_cfg.get("note_pattern", r"^注[：:]")
+    source_pat = r"^(资料)?来源\s*[：:]"
+    cap_ls = cap_cfg.get("line_spacing", body_ls)
+
+    def _is_preserved(para):
+        return id(para._element) in preserved_para_ids
+
+    _cap_space_re = re.compile(r"^((?:图|表|Figure|Table)\s*[A-Z]?\d+)(\S)", re.I)
+    for para in doc.paragraphs:
+        if _is_preserved(para):
+            continue
+        has_seq = any("instrText" in str(run._element) for run in para.runs)
+        if has_seq:
+            continue
+        t = para.text.strip()
+        m = _cap_space_re.match(t)
+        if m:
+            _insert_space_at_offset(para, len(m.group(1)))
+
+    for para in doc.paragraphs:
+        if _is_preserved(para):
+            continue
+        t = para.text.strip()
+        if re.match(fig_pat, t) or re.match(r"^Figure\s*\d", t, re.I) or re.match(r"^图[A-Z]\d+", t):
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.paragraph_format.first_line_indent = parse_length(0)
+            apply_line_spacing(para.paragraph_format, cap_ls)
+            para.paragraph_format.space_after = spacing_line
+            set_para_runs_font(para, east_asia=body_font, size_pt=caption_size,
+                               bold=False, latin=latin)
+        elif re.match(tbl_pat, t) or re.match(r"^Table\s*\d", t, re.I) or re.match(r"^(续)?表[A-Z]\d+", t):
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.paragraph_format.first_line_indent = parse_length(0)
+            apply_line_spacing(para.paragraph_format, cap_ls)
+            para.paragraph_format.space_before = spacing_line
+            set_para_runs_font(para, east_asia=body_font, size_pt=caption_size,
+                               bold=False, latin=latin)
+        elif re.match(subfig_pat, t):
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.paragraph_format.first_line_indent = parse_length(0)
+            apply_line_spacing(para.paragraph_format, cap_ls)
+            set_para_runs_font(para, east_asia=body_font, size_pt=caption_size,
+                               bold=False, latin=latin)
+        elif re.match(note_pat, t) or re.match(source_pat, t):
+            para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            para.paragraph_format.first_line_indent = parse_length(0)
+            apply_line_spacing(para.paragraph_format, cap_ls)
+            set_para_runs_font(para, east_asia=body_font, size_pt=note_size,
+                               bold=False, latin=latin)
+
+    if cap_cfg.get("keep_with_next", True):
+        body_el = doc.element.body
+        children = list(body_el)
+        for i, el in enumerate(children):
+            if el.tag == qn("w:tbl"):
+                if i > 0 and children[i - 1].tag == qn("w:p"):
+                    prev_text = "".join(
+                        (nd.text or "") for nd in children[i - 1].iter(qn("w:t"))
+                    ).strip()
+                    if re.match(tbl_pat, prev_text) or re.match(r"^Table\s*\d", prev_text, re.I) or re.match(r"^(续)?表[A-Z]\d+", prev_text):
+                        _ensure_keep_next(children[i - 1])
+                if i + 1 < len(children) and children[i + 1].tag == qn("w:p"):
+                    nt = "".join(
+                        (nd.text or "") for nd in children[i + 1].iter(qn("w:t"))
+                    ).strip()
+                    if nt and not re.match(note_pat, nt) and not re.match(source_pat, nt):
+                        _set_para_spacing(children[i + 1], "before", spacing_line)
+            elif el.tag == qn("w:p") and el.findall(".//" + qn("w:drawing")):
+                if i + 1 < len(children) and children[i + 1].tag == qn("w:p"):
+                    next_text = "".join(
+                        (nd.text or "") for nd in children[i + 1].iter(qn("w:t"))
+                    ).strip()
+                    if re.match(fig_pat, next_text) or re.match(r"^Figure\s*\d", next_text, re.I) or re.match(r"^图[A-Z]\d+", next_text):
+                        _ensure_keep_next(el)
+                if i > 0 and children[i - 1].tag == qn("w:p"):
+                    pt = "".join(
+                        (nd.text or "") for nd in children[i - 1].iter(qn("w:t"))
+                    ).strip()
+                    if pt and not re.match(fig_pat, pt) and not re.match(subfig_pat, pt):
+                        _set_para_spacing(el, "before", spacing_line)
+
+    return cap_cfg, fig_pat, tbl_pat
+
 
 def apply_format(input_path, output_path, config=None, config_path=None):
     if config is None:
@@ -157,14 +340,12 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     h4_bold = _bold_val(cfg["headings"]["h4"]["bold"])
     h4_align = _ALIGN_MAP.get(cfg["headings"]["h4"]["align"])
 
-    caption_size = parse_length(cfg["sizes"]["caption"])
-    note_size = parse_length(cfg["sizes"]["note"])
     fn_size = parse_length(cfg["sizes"]["footnote"])
 
     st_map = _get_special_title_map(cfg)
     sec = cfg["sections"]
-    ref_key = "\u53c2\u8003\u6587\u732e"
-    toc_key = "\u76ee\u5f55"
+    ref_key = "参考文献"
+    toc_key = "目录"
     toc_cfg = cfg.get("toc", {})
     toc_enabled = toc_cfg.get("enabled", True)
     toc_only = toc_cfg.get("only_insert", False)
@@ -228,29 +409,8 @@ def apply_format(input_path, output_path, config=None, config_path=None):
 
     if toc_only:
         if toc_enabled:
-            auto_changes = auto_assign_heading_styles(doc, cfg, preserve_look=True)
-            if auto_changes:
-                print(f"自动识别标题（仅用于目录，保留原外观）({len(auto_changes)} 个):", file=sys.stderr)
-                for item in auto_changes:
-                    print(item, file=sys.stderr)
-            abstract_demotions = demote_abstract_heading_styles(
-                doc,
-                cfg,
-                include_abstract=toc_cfg.get("exclude_abstract_headings", True),
-                aggressive_body_demote=True,
-            )
-            if abstract_demotions:
-                print(f"以下段落已从 Heading 样式解除，不参与目录 ({len(abstract_demotions)} 个):", file=sys.stderr)
-                for item in abstract_demotions:
-                    print(item, file=sys.stderr)
-            if sec.get("renumber_headings", False):
-                renum_changes = renumber_headings(doc, cfg)
-                if renum_changes:
-                    print(f"已顺便校正标题编号顺序 ({len(renum_changes)} 个):", file=sys.stderr)
-                    for item in renum_changes:
-                        print(item, file=sys.stderr)
-            normalize_heading_spacing(doc, cfg)
-        if toc_enabled:
+            from .headings import assign_outline_levels_for_toc
+            assign_outline_levels_for_toc(doc, cfg)
             _configure_toc_styles()
             insert_toc(doc, cfg)
         cfg.setdefault("_runtime", {})["local_mode"] = "toc"
@@ -273,10 +433,10 @@ def apply_format(input_path, output_path, config=None, config_path=None):
 
     preserved_para_ids = {id(para._element) for para in doc.paragraphs[:preserve_until_idx]}
     preserve_front_matter = bool(preserved_para_ids)
-    preserved_front_snapshots = [
-        copy.deepcopy(para._element)
+    preserved_front_snapshots = {
+        id(para._element): copy.deepcopy(para._element)
         for para in doc.paragraphs[:preserve_until_idx]
-    ] if preserve_front_matter else []
+    } if preserve_front_matter else {}
 
     def _is_preserved_front_para(para):
         return id(para._element) in preserved_para_ids
@@ -284,14 +444,17 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     def _restore_preserved_front_paragraphs():
         if not preserved_front_snapshots:
             return
-        for idx, original_el in enumerate(preserved_front_snapshots):
-            if idx >= len(doc.paragraphs):
-                break
+        for para in doc.paragraphs:
+            el_id = id(para._element)
+            if el_id not in preserved_front_snapshots:
+                continue
 
-            current_el = doc.paragraphs[idx]._element
+            current_el = para._element
             parent = current_el.getparent()
             if parent is None:
                 continue
+
+            original_el = preserved_front_snapshots[el_id]
 
             current_ppr = current_el.find(qn("w:pPr"))
             current_sectpr = None
@@ -324,14 +487,14 @@ def apply_format(input_path, output_path, config=None, config_path=None):
 
     auto_changes = auto_assign_heading_styles(doc, cfg, skip_para_ids=preserved_para_ids)
     if auto_changes:
-        print(f"\u81ea\u52a8\u8bc6\u522b\u6807\u9898 ({len(auto_changes)} \u4e2a):", file=sys.stderr)
+        print(f"自动识别标题 ({len(auto_changes)} 个):", file=sys.stderr)
         for c in auto_changes:
             print(c, file=sys.stderr)
 
     try:
         warnings.extend(validate_structure(doc, cfg) or [])
     except Exception as exc:
-        print(f"\u7ed3\u6784\u68c0\u67e5\u51fa\u9519\uff08\u5df2\u8df3\u8fc7\uff0c\u7ee7\u7eed\u6392\u7248\uff09: {exc}", file=sys.stderr)
+        print(f"结构检查出错（已跳过，继续排版）: {exc}", file=sys.stderr)
     normalize_sections(doc, cfg)
 
     renum_changes = []
@@ -390,7 +553,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         if _is_preserved_front_para(para):
             continue
         sn = para.style.name if para.style else ""
-        if sn.lower().startswith("toc ") or sn == "\u6837\u5f0f3":
+        if sn.lower().startswith("toc ") or sn == "样式3":
             is_toc1 = sn.lower() == "toc 1"
             para.paragraph_format.first_line_indent = parse_length(0)
             apply_line_spacing(para.paragraph_format, toc_content_ls)
@@ -414,7 +577,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         if _fn_align is not None:
             ft.paragraph_format.alignment = _fn_align
 
-    for name in ["Hyperlink", "\u8d85\u94fe\u63a5"]:
+    for name in ["Hyperlink", "超链接"]:
         if name in [s.name for s in doc.styles]:
             st = doc.styles[name]
             st.font.color.rgb = RGBColor(0, 0, 0)
@@ -425,7 +588,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             continue
         level = get_paragraph_heading_level(para)
         sn = para.style.name if para.style else ""
-        if sn.lower().startswith("toc ") or sn == "\u6837\u5f0f3":
+        if sn.lower().startswith("toc ") or sn == "样式3":
             continue
         if level is not None:
             hkey = {1: "h1", 2: "h2", 3: "h3", 4: "h4"}.get(level, "h1")
@@ -466,10 +629,10 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         front = doc.paragraphs[cover_end_idx:first_h1_idx]
         non_empty = [p for p in front if p.text.strip()]
 
-        cn_kw_re = sec.get("cn_keywords_pattern", r"^\s*\u5173\u952e\u8bcd\s*[\uff1a:]")
+        cn_kw_re = sec.get("cn_keywords_pattern", r"^\s*关键词\s*[：:]")
         en_abs_re = sec.get("en_abstract_pattern", r"(?i)^\s*Abstract\s*[\uff1a:]")
         en_kw_re = sec.get("en_keywords_pattern", r"(?i)^\s*Key\s*words\s*[\uff1a:]")
-        abstract_display = _find_special_display(cfg, "\u6458\u8981")
+        abstract_display = _find_special_display(cfg, "摘要")
         abstract_display_key = abstract_display.replace(" ", "").replace("\u3000", "")
         front_has_cjk = any(contains_cjk(p.text.strip()) for p in non_empty)
         front_has_english = any(
@@ -494,23 +657,24 @@ def apply_format(input_path, output_path, config=None, config_path=None):
         for idx, p in enumerate(non_empty):
             t = p.text.strip()
             t_nospace = t.replace(" ", "").replace("\u3000", "")
-            if idx == 0 and t_nospace in {"\u6458\u8981", abstract_display_key}:
+            if idx == 0 and t_nospace in {"摘要", abstract_display_key}:
                 if normal_style is not None:
                     p.style = normal_style
-                p.text = abstract_display
+                p.clear()
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 p.paragraph_format.first_line_indent = parse_length(0)
                 apply_line_spacing(p.paragraph_format, body_ls)
-                set_para_runs_font(p, east_asia=h1_font, size_pt=h1_size, bold=True, latin=latin)
+                r = p.add_run(abstract_display)
+                set_run_font(r, east_asia=h1_font, size_pt=h1_size, bold=True, latin=latin)
             elif re.match(cn_kw_re, t):
                 cn_kw_para = p
                 normalized = normalize_cn_keywords(t) or t
-                content = normalized.split("\uff1a", 1)[1] if "\uff1a" in normalized else ""
+                content = normalized.split("：", 1)[1] if "：" in normalized else ""
                 p.clear()
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.first_line_indent = parse_length(0)
                 apply_line_spacing(p.paragraph_format, body_ls)
-                r1 = p.add_run("\u5173\u952e\u8bcd\uff1a")
+                r1 = p.add_run("关键词：")
                 set_run_font(r1, east_asia=h1_font, size_pt=body_size, bold=True, latin=latin)
                 r2 = p.add_run(content)
                 set_run_font(r2, east_asia=body_font, size_pt=body_size, bold=False, latin=latin)
@@ -518,11 +682,12 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                 past_abstract = True
                 if normal_style is not None:
                     p.style = normal_style
-                p.text = "Abstract"
+                p.clear()
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 p.paragraph_format.first_line_indent = parse_length(0)
                 apply_line_spacing(p.paragraph_format, body_ls)
-                set_para_runs_font(p, east_asia=latin, size_pt=h1_size, bold=True, latin=latin)
+                r = p.add_run("Abstract")
+                set_run_font(r, east_asia=latin, size_pt=h1_size, bold=True, latin=latin)
             elif re.match(en_abs_re, t):
                 past_abstract = True
                 if normal_style is not None:
@@ -562,11 +727,13 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             elif has_explicit_en_abstract and not past_abstract and re.match(r"^[\(\uff08]", t) and re.search(r"(China|University|College)", t, re.I):
                 new_t = t
                 if new_t.startswith("("):
-                    new_t = "\uff08" + new_t[1:]
+                    new_t = "（" + new_t[1:]
                 if new_t.endswith(")"):
-                    new_t = new_t[:-1] + "\uff09"
+                    new_t = new_t[:-1] + "）"
                 if new_t != t:
-                    p.text = new_t
+                    for run in p.runs:
+                        if run.text:
+                            run.text = run.text.replace("(", "（").replace(")", "）")
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 p.paragraph_format.first_line_indent = parse_length(0)
                 apply_line_spacing(p.paragraph_format, body_ls)
@@ -587,7 +754,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                                        bold=False, latin=latin)
 
         if front_has_english and not has_explicit_en_abstract:
-            warnings.append("\u524d\u7f6e\u9875\u7f3a\u5c11\u660e\u786e\u7684\u82f1\u6587Abstract\u6807\u9898\uff0c\u5df2\u4fdd\u7559\u539f\u6587\uff0c\u672a\u5f3a\u884c\u8865\u5199\u3002")
+            warnings.append("前置页缺少明确的英文Abstract标题，已保留原文，未强行补写。")
 
         if cn_kw_para is not None:
             insert_page_break_after(cn_kw_para)
@@ -631,14 +798,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                                bold=True, latin=latin)
         elif level == 1:
             _apply_heading_para(para, h1_align, cfg["headings"]["h1"], h1_font, h1_size, h1_bold)
-            if t_nospace in st_map:
-                entry = st_map[t_nospace]
-                para.text = entry["display"]
-                para.alignment = _ALIGN_MAP.get(entry.get("align", "center"),
-                                                WD_ALIGN_PARAGRAPH.CENTER)
-                set_para_runs_font(para, east_asia=h1_font, size_pt=h1_size,
-                                   bold=True, latin=latin)
-            elif t.startswith("\u9644\u5f55"):
+            if t.startswith("附录"):
                 para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 set_para_runs_font(para, east_asia=h1_font, size_pt=h1_size,
                                    bold=True, latin=latin)
@@ -648,26 +808,8 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             _apply_heading_para(para, h3_align, cfg["headings"]["h3"], h3_font, h3_size, h3_bold)
         elif level == 4:
             _apply_heading_para(para, h4_align, cfg["headings"]["h4"], h4_font, h4_size, h4_bold)
-        elif level == 1:
-            para.paragraph_format.first_line_indent = parse_length(0)
-            apply_line_spacing(para.paragraph_format, body_ls)
-            sb = cfg["headings"]["h1"].get("space_before", 0)
-            sa = cfg["headings"]["h1"].get("space_after", 0)
-            if sb >= 0:
-                apply_paragraph_spacing(para.paragraph_format, "before", sb)
-            if sa >= 0:
-                apply_paragraph_spacing(para.paragraph_format, "after", sa)
-            if t_nospace in st_map:
-                entry = st_map[t_nospace]
-                para.text = entry["display"]
-                para.alignment = _ALIGN_MAP.get(entry.get("align", "center"),
-                                                WD_ALIGN_PARAGRAPH.CENTER)
-                set_para_runs_font(para, east_asia=h1_font, size_pt=h1_size,
-                                   bold=True, latin=latin)
-            elif t.startswith("\u9644\u5f55"):
-                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                set_para_runs_font(para, east_asia=h1_font, size_pt=h1_size,
-                                   bold=True, latin=latin)
+        if level is not None:
+            _ensure_keep_next(para._element)
 
     ref_cfg = cfg["references"]
     in_refs = False
@@ -689,96 +831,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             set_para_runs_font(para, east_asia=body_font, size_pt=body_size,
                                bold=False, latin=latin)
 
-    cap_cfg = cfg.get("captions", {})
-    fig_pat = cap_cfg.get("figure_pattern", r"^\u56fe\s*\d")
-    tbl_pat = cap_cfg.get("table_pattern", r"^(\u7eed)?\u8868\s*\d")
-    subfig_pat = cap_cfg.get("subfigure_pattern", r"^\([a-z]\)")
-    note_pat = cap_cfg.get("note_pattern", r"^\u6ce8[\uff1a:]")
-
-    cap_ls = cap_cfg.get("line_spacing", body_ls)
-    # 跳过已使用 SEQ 域的段落，只处理纯文本的题注
-    _cap_space_re = re.compile(r"^((?:\u56fe|\u8868|Figure|Table)\s*[A-Z]?\d+)(\S)", re.I)
-    for para in doc.paragraphs:
-        if _is_preserved_front_para(para):
-            continue
-        # 跳过包含 SEQ 域的段落
-        has_seq = False
-        for run in para.runs:
-            if "instrText" in str(run._element):
-                has_seq = True
-                break
-        if has_seq:
-            continue
-
-        t = para.text.strip()
-        m = _cap_space_re.match(t)
-        if m:
-            para.text = m.group(1) + " " + t[m.end(1):]
-
-    spacing_line = parse_length(cfg["sizes"]["body"])
-    source_pat = r"^(\u8d44\u6599)?\u6765\u6e90\s*[\uff1a:]"
-
-    for para in doc.paragraphs:
-        if _is_preserved_front_para(para):
-            continue
-        t = para.text.strip()
-        if re.match(fig_pat, t) or re.match(r"^Figure\s*\d", t, re.I) or re.match(r"^\u56fe[A-Z]\d+", t):
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            para.paragraph_format.first_line_indent = parse_length(0)
-            apply_line_spacing(para.paragraph_format, cap_ls)
-            para.paragraph_format.space_after = spacing_line
-            set_para_runs_font(para, east_asia=body_font, size_pt=caption_size,
-                               bold=False, latin=latin)
-        elif re.match(tbl_pat, t) or re.match(r"^Table\s*\d", t, re.I) or re.match(r"^(\u7eed)?\u8868[A-Z]\d+", t):
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            para.paragraph_format.first_line_indent = parse_length(0)
-            apply_line_spacing(para.paragraph_format, cap_ls)
-            para.paragraph_format.space_before = spacing_line
-            set_para_runs_font(para, east_asia=body_font, size_pt=caption_size,
-                               bold=False, latin=latin)
-        elif re.match(subfig_pat, t):
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            para.paragraph_format.first_line_indent = parse_length(0)
-            apply_line_spacing(para.paragraph_format, cap_ls)
-            set_para_runs_font(para, east_asia=body_font, size_pt=caption_size,
-                               bold=False, latin=latin)
-        elif re.match(note_pat, t) or re.match(source_pat, t):
-            para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            para.paragraph_format.first_line_indent = parse_length(0)
-            apply_line_spacing(para.paragraph_format, cap_ls)
-            set_para_runs_font(para, east_asia=body_font, size_pt=note_size,
-                               bold=False, latin=latin)
-
-    if cap_cfg.get("keep_with_next", True):
-        body_el = doc.element.body
-        children = list(body_el)
-        for i, el in enumerate(children):
-            if el.tag == qn("w:tbl"):
-                if i > 0 and children[i - 1].tag == qn("w:p"):
-                    prev_text = "".join(
-                        (nd.text or "") for nd in children[i - 1].iter(qn("w:t"))
-                    ).strip()
-                    if re.match(tbl_pat, prev_text) or re.match(r"^Table\s*\d", prev_text, re.I) or re.match(r"^(\u7eed)?\u8868[A-Z]\d+", prev_text):
-                        _ensure_keep_next(children[i - 1])
-                if i + 1 < len(children) and children[i + 1].tag == qn("w:p"):
-                    nt = "".join(
-                        (nd.text or "") for nd in children[i + 1].iter(qn("w:t"))
-                    ).strip()
-                    if nt and not re.match(note_pat, nt) and not re.match(source_pat, nt):
-                        _set_para_spacing(children[i + 1], "before", spacing_line)
-            elif el.tag == qn("w:p") and el.findall(".//" + qn("w:drawing")):
-                if i + 1 < len(children) and children[i + 1].tag == qn("w:p"):
-                    next_text = "".join(
-                        (nd.text or "") for nd in children[i + 1].iter(qn("w:t"))
-                    ).strip()
-                    if re.match(fig_pat, next_text) or re.match(r"^Figure\s*\d", next_text, re.I) or re.match(r"^\u56fe[A-Z]\d+", next_text):
-                        _ensure_keep_next(el)
-                if i > 0 and children[i - 1].tag == qn("w:p"):
-                    pt = "".join(
-                        (nd.text or "") for nd in children[i - 1].iter(qn("w:t"))
-                    ).strip()
-                    if pt and not re.match(fig_pat, pt) and not re.match(subfig_pat, pt):
-                        _set_para_spacing(el, "before", spacing_line)
+    cap_cfg, fig_pat, tbl_pat = _format_captions(doc, cfg, preserved_para_ids)
 
     if cap_cfg.get("check_numbering", True):
         warnings.extend(_check_caption_numbering(doc, fig_pat, tbl_pat, cfg))
@@ -791,67 +844,40 @@ def apply_format(input_path, output_path, config=None, config_path=None):
     try:
         warnings.extend(check_citations(doc, cfg))
     except Exception as exc:
-        print(f"\u5f15\u7528\u68c0\u67e5\u51fa\u9519\uff08\u5df2\u8df3\u8fc7\uff09: {exc}", file=sys.stderr)
+        print(f"引用检查出错（已跳过）: {exc}", file=sys.stderr)
 
     _cite_comma = re.compile(r",\s*((?:19|20)\d{2})")
     for para in doc.paragraphs:
         if _is_preserved_front_para(para):
             continue
-        for run in para.runs:
-            old = run.text
-            new = _cite_comma.sub(r", \1", old)
-            if new != old:
-                run.text = new
-                print(f"  \u5f15\u7528\u9017\u53f7\u4fee\u6b63: \"{old.strip()[:40]}\" \u2192 \"{new.strip()[:40]}\"")
+        runs = para.runs
+        if not runs:
+            continue
+        full_text = "".join(r.text or "" for r in runs)
+        if not _cite_comma.search(full_text):
+            continue
+        pos = 0
+        run_spans = []
+        for r in runs:
+            rt = r.text or ""
+            run_spans.append((r, pos, pos + len(rt)))
+            pos += len(rt)
+        for m in _cite_comma.finditer(full_text):
+            insert_pos = m.start() + 1
+            for r, start, end in run_spans:
+                if start <= insert_pos < end:
+                    local = insert_pos - start
+                    rt = r.text or ""
+                    r.text = rt[:local] + " " + rt[local:]
+                    break
+            print(f"  引用逗号修正: \"{m.group(0)}\" → \", {m.group(1)}\"")
 
     try:
         apply_ref_crosslinks(doc, cfg)
     except Exception as exc:
-        print(f"\u4ea4\u53c9\u5f15\u7528\u521b\u5efa\u51fa\u9519\uff08\u5df2\u8df3\u8fc7\uff09: {exc}", file=sys.stderr)
+        print(f"交叉引用创建出错（已跳过）: {exc}", file=sys.stderr)
 
-    tbl_cfg = cfg["table"]
-    tbl_cell_align = _ALIGN_MAP.get(tbl_cfg.get("cell_align", "center"))
-    for table in doc.tables:
-        tbl = table._tbl
-        tblPr = tbl.tblPr
-        if tblPr is None:
-            tblPr = OxmlElement('w:tblPr')
-            tbl.insert(0, tblPr)
-        tblW = tblPr.find(qn('w:tblW'))
-        if tblW is None:
-            tblW = OxmlElement('w:tblW')
-            tblPr.append(tblW)
-        tblW.set(qn('w:type'), 'pct')
-        tblW.set(qn('w:w'), '5000')
-        tblLayout = tblPr.find(qn('w:tblLayout'))
-        if tblLayout is None:
-            tblLayout = OxmlElement('w:tblLayout')
-            tblPr.append(tblLayout)
-        tblLayout.set(qn('w:type'), 'autofit')
-
-        rows = len(table.rows)
-        for r_idx, row in enumerate(table.rows):
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    if tbl_cell_align is not None:
-                        p.alignment = tbl_cell_align
-                    apply_paragraph_spacing(p.paragraph_format, "before", 0)
-                    apply_paragraph_spacing(p.paragraph_format, "after", 0)
-                    p.paragraph_format.first_line_indent = parse_length(0)
-                    apply_line_spacing(p.paragraph_format, tbl_cfg["line_spacing"])
-                    set_para_runs_font(p, east_asia=body_font, size_pt=caption_size,
-                                       bold=False, latin=latin)
-
-                clear_table_border(cell, "left")
-                clear_table_border(cell, "right")
-                clear_table_border(cell, "insideV")
-                clear_table_border(cell, "insideH")
-
-                if r_idx == 0:
-                    set_table_border(cell, "top", sz=tbl_cfg["top_border_sz"])
-                    set_table_border(cell, "bottom", sz=tbl_cfg["header_border_sz"])
-                if r_idx == rows - 1:
-                    set_table_border(cell, "bottom", sz=tbl_cfg["bottom_border_sz"])
+    _format_tables(doc, cfg)
     if toc_enabled:
         abstract_demotions = demote_abstract_heading_styles(doc, cfg, include_abstract=toc_cfg.get("exclude_abstract_headings", True))
         if abstract_demotions:
@@ -860,7 +886,7 @@ def apply_format(input_path, output_path, config=None, config_path=None):
                 print(item, file=sys.stderr)
     if toc_enabled:
         insert_toc(doc, cfg)
-    toc_match = _find_special_display(cfg, "\u76ee\u5f55", raw=True)
+    toc_match = _find_special_display(cfg, "目录", raw=True)
     first_body_h1 = find_first_body_heading(doc, cfg)
     body_started = first_body_h1 is None
     for para in doc.paragraphs:
@@ -885,7 +911,12 @@ def apply_format(input_path, output_path, config=None, config_path=None):
 
     _restore_preserved_front_paragraphs()
     if toc_enabled:
-        demote_abstract_heading_styles(doc, cfg, include_abstract=toc_cfg.get("exclude_abstract_headings", True))
+        demote_abstract_heading_styles(doc, cfg, include_abstract=toc_cfg.get("exclude_abstract_headings", True), aggressive_body_demote=False)
+    setup_page_numbers(doc, cfg)
+    try:
+        setup_headers(doc, cfg)
+    except Exception as e:
+        print(f"  [警告] 页眉设置出错，已跳过: {e}", file=sys.stderr)
     doc.save(output_path)
     if use_custom_cover:
         success, err = _insert_cover_via_vbs(output_path, custom_cover)
@@ -894,16 +925,9 @@ def apply_format(input_path, output_path, config=None, config_path=None):
             print("自定义封面已插入 (VBS)", file=sys.stderr)
         else:
             print(f"自定义封面插入失败（VBS不可用，已跳过）: {err}", file=sys.stderr)
-    doc = Document(output_path)
-    setup_page_numbers(doc, cfg)
-    try:
-        setup_headers(doc, cfg)
-    except Exception as e:
-        print(f"  [\u8b66\u544a] \u9875\u7709\u8bbe\u7f6e\u51fa\u9519\uff0c\u5df2\u8df3\u8fc7: {e}", file=sys.stderr)
-    doc.save(output_path)
     patch_theme_fonts(output_path, cfg)
     if renum_changes:
-        warnings.append("\u6807\u9898\u7f16\u53f7\u5df2\u81ea\u52a8\u4fee\u6b63:")
+        warnings.append("标题编号已自动修正:")
         warnings.extend(renum_changes)
     return warnings
 
@@ -912,7 +936,7 @@ def patch_theme_fonts(docx_path, cfg):
     import xml.etree.ElementTree as ET
     theme = cfg.get("theme_fonts", {})
     theme_latin = theme.get("latin", "Times New Roman")
-    theme_hans = theme.get("hans", "\u5b8b\u4f53")
+    theme_hans = theme.get("hans", "宋体")
 
     a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
     ET.register_namespace("a", a_ns)

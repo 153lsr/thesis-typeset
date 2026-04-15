@@ -40,11 +40,11 @@ def _render_header_para(paragraph, text, cfg, hf_cfg, doc, align="center"):
                         aliases_el = OxmlElement("w:aliases")
                         name_el.addnext(aliases_el)
                     existing = aliases_el.get(qn("w:val"), "")
-                    if "\u6807\u9898 1" not in existing:
-                        new_val = ("\u6807\u9898 1," + existing) if existing else "\u6807\u9898 1"
+                    if "标题 1" not in existing:
+                        new_val = ("标题 1," + existing) if existing else "标题 1"
                         aliases_el.set(qn("w:val"), new_val)
                 break
-        h1_style_name = "\u6807\u9898 1"
+        h1_style_name = "标题 1"
 
         def _hf_run(txt=None):
             r = paragraph.add_run(txt) if txt else paragraph.add_run()
@@ -69,7 +69,7 @@ def _render_header_para(paragraph, text, cfg, hf_cfg, doc, align="center"):
         sep = OxmlElement("w:fldChar")
         sep.set(qn("w:fldCharType"), "separate")
         r3._element.append(sep)
-        _hf_run("(\u7ae0\u6807\u9898)")
+        _hf_run("(章标题)")
         r5 = _hf_run()
         end = OxmlElement("w:fldChar")
         end.set(qn("w:fldCharType"), "end")

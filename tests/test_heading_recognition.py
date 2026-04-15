@@ -41,7 +41,7 @@ class HeadingRecognitionTests(unittest.TestCase):
         self.assertEqual(levels, [None, None, None])
         self.assertEqual(changes, [])
 
-    def test_full_format_strips_manual_heading_prefix_before_word_numbering(self):
+    def test_full_format_normalizes_heading_spacing(self):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["cover"]["enabled"] = False
         cfg["toc"]["enabled"] = False
@@ -61,8 +61,8 @@ class HeadingRecognitionTests(unittest.TestCase):
 
             out = Document(output_path)
             meaningful = [p for p in out.paragraphs if p.text.strip()]
-            self.assertEqual(meaningful[0].text.strip(), "绪论")
-            self.assertEqual(meaningful[1].text.strip(), "研究背景")
+            self.assertEqual(meaningful[0].text.strip(), "1  绪论")
+            self.assertEqual(meaningful[1].text.strip(), "1.1  研究背景")
 
 
 if __name__ == "__main__":
